@@ -8,12 +8,13 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 ## What it does
 
-- Log each blanket with photos, a blanket number, start and finish dates, size, stitches wide, rows, stitch, yarn and notes
+- Log each blanket with photos, a blanket number, start and finish dates, size, stitches wide, rows, yarn and notes
+- **Pattern:** a pattern name, a link (Ravelry, a blog, YouTube…) and/or an attached pattern file (PDF, photo or document, up to 30 MB) that you can open or save from the blanket
 - **Plan before you start:** planned size, and how many skeins of each colour you expect to use
 - **Skein tracker:** tap **New skein** each time you join one, so you never lose count (with undo, and a dated skein diary)
 - **I finished it!** asks for the finished size and skeins used, then shows planned vs. actual: "2 in narrower and 3 in longer than planned", "1 more skein than planned"
 - Browse your blankets by year, with totals for blankets made and skeins used
-- Search anything: "sage", "garter", "Bernat", "pillow"
+- Search anything: "sage", a pattern name, "Bernat", "pillow"
 - Tap **Make another like this** to plan a new blanket from what an old one actually took
 - Save a **backup** file (to Files, iCloud Drive, Google Drive or email) and restore it on a new phone
 - Works offline and looks right in light and dark mode

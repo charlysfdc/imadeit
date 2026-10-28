@@ -1,6 +1,6 @@
 // Everything lives in IndexedDB on this device. Nothing is ever sent anywhere.
 const DB_NAME = 'imadeit';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise;
 
@@ -13,8 +13,13 @@ function openDB() {
         if (!db.objectStoreNames.contains('blankets')) db.createObjectStore('blankets', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' });
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        // Let a newer version of the app (open in another tab) upgrade the database.
+        req.result.onversionchange = () => req.result.close();
+        resolve(req.result);
+      };
       req.onerror = () => reject(req.error);
     });
   }

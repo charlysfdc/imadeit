@@ -1,9 +1,9 @@
 import { db } from './db.js';
 import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
 
-const APP_VERSION = '1.1.0';
-const STITCHES = ['Garter', 'Stockinette', 'Basketweave', 'Waffle', 'Ribbed', 'Seed / Moss', 'Checkerboard', 'Herringbone', 'Braided border', 'Bobble'];
+const APP_VERSION = '1.2.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
+const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
 const state = {
   blankets: [],
@@ -19,6 +19,7 @@ const app = document.getElementById('app');
 const photoURLs = new Map();
 let installPrompt = null;
 let unsavedChanges = false;
+let patternFileURL = null;
 
 // ---------- Small helpers ----------
 
@@ -62,12 +63,17 @@ const usedOf = (b) => (b.yarns || []).reduce((n, y) => n + num(y.used), 0);
 const plannedOf = (b) => (b.yarns || []).reduce((n, y) => n + num(y.planned), 0);
 const emptyYarn = () => ({ brand: '', color: '', planned: '', used: '', log: [] });
 
-// Version 1.0 stored one "skeins" number per yarn; it meant skeins used.
-function normalize(b) {
+// Version 1.0 stored one "skeins" number per yarn (it meant skeins used),
+// and versions before 1.2 had a single "stitch" field that is now the pattern name.
+function normalize(blanket) {
+  const { stitch, ...b } = blanket;
   return {
     plannedWidth: '',
     plannedLength: '',
+    patternUrl: '',
+    patternFile: null,
     ...b,
+    patternName: b.patternName ?? stitch ?? '',
     yarns: (b.yarns || []).map((y) => ({
       brand: y.brand || '',
       color: y.color || '',
@@ -78,6 +84,47 @@ function normalize(b) {
   };
 }
 const unitLabel = () => (state.settings.unit === 'cm' ? 'cm' : 'in');
+
+// Accepts "ravelry.com/patterns/..." as well as full links, but only ever web links.
+function safeURL(text) {
+  const t = (text || '').trim();
+  if (!t) return '';
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+function fileSize(bytes) {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+// Hands a file to the share sheet (Save to Files, Books, Mail…) or downloads it where sharing isn't available.
+async function shareOrDownload(file, title) {
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title });
+      return 'shared';
+    } catch (err) {
+      if (err.name === 'AbortError') return 'cancelled';
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return 'downloaded';
+}
 
 function readLocal(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -105,6 +152,9 @@ const icon = {
   camera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  file: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
+  link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+  external: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>',
   shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
 };
 
@@ -233,7 +283,7 @@ function renderHome() {
         <div><strong>${Math.round(skeins * 10) / 10}</strong><span>skeins used</span></div>
       </section>
       <label class="search">${icon.search}
-        <input type="search" id="search" placeholder="Search colour, yarn, stitch, notes…" value="${esc(state.query)}" autocomplete="off" enterkeyhint="search">
+        <input type="search" id="search" placeholder="Search colour, yarn, pattern, notes…" value="${esc(state.query)}" autocomplete="off" enterkeyhint="search">
       </label>
       <div class="chips" role="group" aria-label="Show">
         ${[['all', 'All'], ['progress', `In progress${inProgress ? ` · ${inProgress}` : ''}`], ['done', 'Finished']]
@@ -243,7 +293,7 @@ function renderHome() {
       <section class="empty">
         <div class="empty-art">${logo}</div>
         <h2>Your first blanket starts here</h2>
-        <p>Snap a photo, jot down the yarn and stitch count, and you'll never have to wonder “how did I make that one?” again.</p>
+        <p>Snap a photo, jot down the yarn and pattern, and you'll never have to wonder “how did I make that one?” again.</p>
         <a class="btn primary" href="#/new">${icon.plus} Log a blanket</a>
       </section>`}
     ${total ? `<a class="fab" href="#/new">${icon.plus}<span>New blanket</span></a>` : ''}`;
@@ -287,7 +337,7 @@ function wireNotices() {
 
 function matches(b, terms) {
   const haystack = [
-    b.number, `#${b.number}`, b.title, b.stitch, b.size, b.notes, b.started, b.finished,
+    b.number, `#${b.number}`, b.title, b.patternName, b.size, b.notes, b.started, b.finished,
     ...(b.yarns || []).flatMap((y) => [y.brand, y.color]),
   ].join(' ').toLowerCase();
   return terms.every((t) => haystack.includes(t));
@@ -324,7 +374,7 @@ function renderResults() {
 
 function card(b) {
   const cover = b.photos && b.photos[0];
-  const detail = [b.stitch, b.size].filter(Boolean).join(' · ');
+  const detail = [b.patternName, b.size].filter(Boolean).join(' · ');
   const planned = plannedOf(b);
   const when = b.finished
     ? fmtDate(b.finished)
@@ -419,7 +469,6 @@ function renderDetail(id) {
     ['Size', b.size],
     ['Stitches wide', b.stitchesWide],
     ['Rows', b.rows],
-    ['Stitch', b.stitch],
   ].filter(([, v]) => has(v));
 
   const yarns = b.yarns || [];
@@ -480,6 +529,18 @@ function renderDetail(id) {
           ${p ? `<span>${has(y.used) ? `planned ${round(p)}` : `${round(p)} planned`}</span>` : ''}</div></li>`;
       }).join('')}</ul>` : '';
 
+  const patternSection = b.patternName || b.patternUrl || b.patternFile ? `
+      <h3>Pattern</h3>
+      <div class="pattern">
+        ${b.patternName ? `<p class="pattern-name">${esc(b.patternName)}</p>` : ''}
+        ${b.patternUrl ? `<a class="pattern-row" href="${esc(b.patternUrl)}" target="_blank" rel="noopener noreferrer">
+            ${icon.link}<span><strong>Open pattern link</strong><small>${esc(hostOf(b.patternUrl))}</small></span>${icon.external}</a>` : ''}
+        ${b.patternFile ? `<div class="pattern-row">
+            ${icon.file}<span><strong>${esc(b.patternFile.name)}</strong><small>${fileSize(b.patternFile.size)}</small></span>
+            <a class="btn small primary" id="pattern-open" target="_blank" rel="noopener">Open</a>
+            <button class="btn small ghost" id="pattern-save">Save</button></div>` : ''}
+      </div>` : '';
+
   const diary = yarns.flatMap((y) => (y.log || []).map((t, k) => ({ t, y, n: k + 1 })))
     .sort((a, b2) => b2.t.localeCompare(a.t));
   const diarySection = diary.length ? `
@@ -503,6 +564,7 @@ function renderDetail(id) {
       <h2>${esc(nameOf(b))}</h2>
       ${tracker}
       ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : ''}
+      ${patternSection}
       ${sizeSection}
       ${yarnSection}
       ${diarySection}
@@ -515,6 +577,7 @@ function renderDetail(id) {
 
   hydratePhotos();
   app.querySelectorAll('[data-open]').forEach((btn) => btn.addEventListener('click', () => openPhoto(btn.dataset.open)));
+  if (b.patternFile) preparePatternFile(b.patternFile);
 
   const updateYarn = async (i, change, message) => {
     const updatedYarns = yarns.map((y, k) => (k === i ? change({ ...y, log: [...(y.log || [])] }) : y));
@@ -545,12 +608,38 @@ function renderDetail(id) {
       await db.remove('photos', p);
       forgetPhoto(p);
     }
+    if (b.patternFile) await db.remove('files', b.patternFile.id);
     await db.remove('blankets', b.id);
     state.blankets = state.blankets.filter((x) => x.id !== b.id);
     await noteChange();
     toast('Blanket deleted');
     location.hash = '#/';
   });
+}
+
+// Phones only open or share a file straight from a tap, so the file is loaded before it's tapped.
+async function preparePatternFile(meta) {
+  if (patternFileURL) URL.revokeObjectURL(patternFileURL);
+  patternFileURL = null;
+  const record = await db.get('files', meta.id);
+  const openLink = document.getElementById('pattern-open');
+  const saveButton = document.getElementById('pattern-save');
+  if (!openLink || !saveButton) return;
+  if (!record) {
+    openLink.replaceWith(Object.assign(document.createElement('span'), { className: 'fine', textContent: 'File missing' }));
+    saveButton.remove();
+    return;
+  }
+  const file = new File([record.blob], meta.name, { type: meta.type || record.blob.type });
+  patternFileURL = URL.createObjectURL(file);
+  openLink.href = patternFileURL;
+  if (file.type.startsWith('image/')) {
+    openLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      showLightbox(patternFileURL);
+    });
+  }
+  saveButton.addEventListener('click', () => shareOrDownload(file, meta.name));
 }
 
 // ---------- Finishing: measure and count ----------
@@ -626,7 +715,10 @@ function renderFinish(id) {
 
 async function openPhoto(id) {
   const url = await photoURL(id, 'full');
-  if (!url) return;
+  if (url) showLightbox(url);
+}
+
+function showLightbox(url) {
   const box = document.createElement('div');
   box.className = 'lightbox';
   box.innerHTML = `<img src="${url}" alt=""><button class="close" aria-label="Close">${icon.close}</button>`;
@@ -668,7 +760,10 @@ function renderForm(id, copyFromId) {
         plannedWidth: source ? (has(source.width) ? source.width : source.plannedWidth) : '',
         plannedLength: source ? (has(source.length) ? source.length : source.plannedLength) : '',
         width: '', length: '',
-        stitchesWide: source?.stitchesWide ?? '', rows: source?.rows ?? '', stitch: source?.stitch || '',
+        stitchesWide: source?.stitchesWide ?? '', rows: source?.rows ?? '',
+        patternName: source?.patternName || '', patternUrl: source?.patternUrl || '',
+        // The copy gets its own copy of the pattern file, so deleting one blanket never removes the other's.
+        patternFile: source?.patternFile ? { ...source.patternFile, id: uid(), copyFrom: source.patternFile.id } : null,
         yarns: (source?.yarns || []).map((y) => ({
           ...emptyYarn(), brand: y.brand, color: y.color, planned: num(y.used) ? y.used : y.planned,
         })),
@@ -683,9 +778,7 @@ function renderForm(id, copyFromId) {
   unsavedChanges = false;
   const heading = existing ? `Edit #${b.number}` : source ? 'Make another' : 'New blanket';
   const unit = unitLabel();
-  const usedStitches = suggestions((x) => [x.stitch]);
-  const stitchOptions = usedStitches.concat(
-    STITCHES.filter((s) => !usedStitches.some((v) => v.toLowerCase() === s.toLowerCase())));
+  let patternFile = b.patternFile ? { ...b.patternFile } : null;
 
   app.innerHTML = `
     <header class="bar">
@@ -714,7 +807,7 @@ function renderForm(id, copyFromId) {
       </section>
 
       <section class="group">
-        <h3>Size &amp; stitch</h3>
+        <h3>Size</h3>
         <div class="chips wrap" role="radiogroup" aria-label="Size">
           ${SIZES.map((s) => `<label class="chip"><input type="radio" name="size" value="${s}"${b.size === s ? ' checked' : ''}><span>${s}</span></label>`).join('')}
         </div>
@@ -740,8 +833,15 @@ function renderForm(id, copyFromId) {
           <label class="field"><span>Rows</span>
             <input name="rows" type="number" inputmode="numeric" min="0" value="${esc(b.rows)}"></label>
         </div>
-        <label class="field"><span>Stitch or pattern</span>
-          <input name="stitch" list="stitch-list" value="${esc(b.stitch)}" placeholder="Garter, basketweave, waffle…" autocomplete="off" autocapitalize="words"></label>
+      </section>
+
+      <section class="group">
+        <h3>Pattern <em class="optional">optional</em></h3>
+        <label class="field"><span>Pattern name</span>
+          <input name="patternName" list="pattern-list" value="${esc(b.patternName)}" placeholder="e.g. Chunky garter throw, or “my own”" autocomplete="off" autocapitalize="sentences"></label>
+        <label class="field"><span>Link</span>
+          <input name="patternUrl" type="url" inputmode="url" value="${esc(b.patternUrl)}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <div id="pattern-file"></div>
       </section>
 
       <section class="group">
@@ -756,7 +856,7 @@ function renderForm(id, copyFromId) {
         <textarea name="notes" rows="5" placeholder="Anything worth remembering: who it was for, what you'd change, why it took longer…">${esc(b.notes)}</textarea>
       </section>
 
-      ${datalist('stitch-list', stitchOptions)}
+      ${datalist('pattern-list', suggestions((x) => [x.patternName]))}
       ${datalist('brand-list', suggestions((x) => (x.yarns || []).map((y) => y.brand)))}
       ${datalist('color-list', suggestions((x) => (x.yarns || []).map((y) => y.color)))}
 
@@ -857,8 +957,40 @@ function renderForm(id, copyFromId) {
     });
   }
 
+  const fileBox = document.getElementById('pattern-file');
+  function drawPatternFile() {
+    fileBox.innerHTML = patternFile
+      ? `<div class="file-chip">${icon.file}
+          <span><strong>${esc(patternFile.name)}</strong><small>${fileSize(patternFile.size)}</small></span>
+          <button type="button" class="link danger-text" id="remove-pattern">Remove</button></div>`
+      : `<label class="btn ghost small file-btn">${icon.file} Attach a pattern file
+          <input type="file" id="pattern-input" accept="application/pdf,.pdf,image/*,.doc,.docx,.txt,.rtf,.pages"></label>
+        <p class="hint">A PDF, photo or document. It's kept on this phone with the blanket.</p>`;
+    document.getElementById('remove-pattern')?.addEventListener('click', () => {
+      patternFile = null;
+      unsavedChanges = true;
+      drawPatternFile();
+    });
+    const input = document.getElementById('pattern-input');
+    input?.addEventListener('change', async () => {
+      const file = input.files[0];
+      input.value = '';
+      if (!file) return;
+      if (file.size > MAX_PATTERN_FILE) {
+        toast('That file is too big. Patterns can be up to 30 MB.');
+        return;
+      }
+      // Copied into a plain Blob: some iPhones can't store the picked File itself.
+      const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+      patternFile = { id: uid(), name: file.name, type: file.type, size: file.size, blob };
+      unsavedChanges = true;
+      drawPatternFile();
+    });
+  }
+
   drawYarns(b.yarns);
   drawPhotos();
+  drawPatternFile();
 
   form.addEventListener('input', () => { unsavedChanges = true; });
   document.getElementById('add-yarn').addEventListener('click', () => {
@@ -888,6 +1020,11 @@ function renderForm(id, copyFromId) {
       toast('The finish date is before the start date.');
       return;
     }
+    const patternUrl = safeURL(data.get('patternUrl'));
+    if ((data.get('patternUrl') || '').trim() && !patternUrl) {
+      toast("That pattern link doesn't look right. It should start with https://");
+      return;
+    }
     const number = numberOrBlank(data.get('number')) || nextNumber;
     const clash = state.blankets.find((x) => x.id !== b.id && Number(x.number) === number);
     if (clash && !confirm(`You already have a Blanket #${number}. Save with the same number anyway?`)) return;
@@ -905,6 +1042,20 @@ function renderForm(id, copyFromId) {
           forgetPhoto(old);
         }
       }
+      let fileMeta = null;
+      if (patternFile) {
+        if (patternFile.blob) {
+          await db.put('files', { id: patternFile.id, blob: patternFile.blob });
+        } else if (patternFile.copyFrom) {
+          const original = await db.get('files', patternFile.copyFrom);
+          if (original) await db.put('files', { id: patternFile.id, blob: original.blob });
+        }
+        const { id: fid, name, type, size } = patternFile;
+        fileMeta = { id: fid, name, type, size };
+      }
+      const oldFile = existing?.patternFile?.id;
+      if (oldFile && oldFile !== fileMeta?.id) await db.remove('files', oldFile);
+
       const saved = {
         ...b,
         number,
@@ -918,7 +1069,9 @@ function renderForm(id, copyFromId) {
         length: numberOrBlank(data.get('length')),
         stitchesWide: numberOrBlank(data.get('stitchesWide')),
         rows: numberOrBlank(data.get('rows')),
-        stitch: (data.get('stitch') || '').trim(),
+        patternName: (data.get('patternName') || '').trim(),
+        patternUrl,
+        patternFile: fileMeta,
         yarns: readYarns()
           .filter((y) => y.brand || y.color || has(y.planned) || has(y.used))
           .map(({ key, ...y }) => y),
@@ -1027,6 +1180,7 @@ function renderSettings() {
     if (!confirm('Last check: this cannot be undone. Delete everything?')) return;
     await db.clear('blankets');
     await db.clear('photos');
+    await db.clear('files');
     await db.setMeta('changesSinceBackup', 0);
     for (const url of photoURLs.values()) URL.revokeObjectURL(url);
     photoURLs.clear();
@@ -1050,9 +1204,10 @@ async function exportBackup() {
   toast('Packing up your blankets…');
   const blankets = await db.all('blankets');
   const photos = await db.all('photos');
+  const files = await db.all('files');
   const payload = {
     app: 'ImadeIt',
-    format: 1,
+    format: 2,
     exportedAt: new Date().toISOString(),
     settings: state.settings,
     blankets,
@@ -1061,29 +1216,11 @@ async function exportBackup() {
       full: await blobToDataURL(p.full),
       thumb: await blobToDataURL(p.thumb),
     }))),
+    files: await Promise.all(files.map(async (f) => ({ id: f.id, data: await blobToDataURL(f.blob) }))),
   };
   const filename = `ImadeIt-backup-${today()}.json`;
   const file = new File([JSON.stringify(payload)], filename, { type: 'application/json' });
-
-  let saved = false;
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: 'ImadeIt backup' });
-      saved = true;
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-    }
-  }
-  if (!saved) {
-    const url = URL.createObjectURL(file);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-  }
+  if ((await shareOrDownload(file, 'ImadeIt backup')) === 'cancelled') return;
 
   state.lastBackup = new Date().toISOString();
   state.changesSinceBackup = 0;
@@ -1113,6 +1250,9 @@ async function importBackup(file) {
     for (const p of data.photos || []) {
       await db.put('photos', { id: p.id, full: await dataURLToBlob(p.full), thumb: await dataURLToBlob(p.thumb) });
       forgetPhoto(p.id);
+    }
+    for (const f of data.files || []) {
+      await db.put('files', { id: f.id, blob: await dataURLToBlob(f.data) });
     }
     for (const b of data.blankets) await db.put('blankets', b);
     await load();
