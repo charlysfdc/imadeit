@@ -10,6 +10,7 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 - Log each blanket with photos, a blanket number, start and finish dates, size, stitches wide, rows, yarn and notes
 - **Pattern:** a pattern name, a link (Ravelry, a blog, YouTube…) and/or an attached pattern file (PDF, photo or document, up to 30 MB) that you can open or save from the blanket
+- **Yarn picker:** brand and colour fields suggest as you type, from 17 well-known chunky and chenille lines (Bernat, Lion Brand, Premier, Cozyful, HOMBYS, Loops & Threads, iDIY, Alize; about 850 colours). Anything else you type is remembered for next time. The list lives in `yarn-catalog.js`.
 - **Plan before you start:** planned size, and how many skeins of each colour you expect to use
 - **Skein tracker:** tap **New skein** each time you join one, so you never lose count (with undo, and a dated skein diary)
 - **I finished it!** asks for the finished size and skeins used, then shows planned vs. actual: "2 in narrower and 3 in longer than planned", "1 more skein than planned"
@@ -61,6 +62,8 @@ the domain once and keep it.
 | `app.js` | All screens: blanket list, blanket details, add/edit form, settings and backups |
 | `db.js` | On-device storage (IndexedDB) |
 | `images.js` | Shrinks photos so they don't fill up the phone |
+| `autocomplete.js` | The type-ahead list used by the yarn brand and colour fields |
+| `yarn-catalog.js` | Built-in yarn brands and their colours |
 | `styles.css` | The cozy rustic look, light and dark |
 | `sw.js` | Offline support |
 | `manifest.webmanifest`, `icons/` | What makes it installable as an app |

@@ -3,7 +3,7 @@ import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
 import { attachAutocomplete, matchScore } from './autocomplete.js';
 import { YARN_LINES } from './yarn-catalog.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -405,7 +405,7 @@ const YARN_COLORS = {
   taupe: '#a39382', sage: '#9caf88', blush: '#e8c4c4', 'dusty rose': '#d3a1a1', rose: '#d99a9a', mauve: '#b58da0',
   mustard: '#d4a537', rust: '#b5562f', terracotta: '#c0673f', burgundy: '#7a2335', forest: '#3f5e3a',
   denim: '#5b7896', charcoal: '#3f3f45', espresso: '#4a3426', camel: '#c19a6b', blue: '#6f8fb5', lilac: '#c3b1d6',
-  lavender: '#b9a7d6', mint: '#bfe0cc', ivory: '#f6f0dc', white: '#f7f4ee', black: '#2b2b2b', grey: '#9a9a9a', gray: '#9a9a9a',
+  lavender: '#b9a7d6', mint: '#bfe0cc', khaki: '#b9a77f', teal: '#3f8f8b', navy: '#2f3d5c', ivory: '#f6f0dc', white: '#f7f4ee', black: '#2b2b2b', grey: '#9a9a9a', gray: '#9a9a9a',
 };
 
 function swatchColor(name) {
@@ -423,7 +423,7 @@ function swatchColor(name) {
 }
 
 const swatch = (y) => {
-  const color = swatchColor(y.color);
+  const color = swatchFill(y.color);
   return `<span class="swatch"${color ? ` style="--swatch:${color}"` : ''}></span>`;
 };
 
@@ -456,6 +456,17 @@ function skeinDiff(used, planned) {
   const d = round(used - planned);
   if (!d) return 'right on plan';
   return d > 0 ? `${d} more than planned` : `${Math.abs(d)} fewer than planned`;
+}
+
+// Mixed and tie-dye colours ("Forest & Sage & Mint") get a swatch split into each colour.
+function swatchFill(name) {
+  const parts = (name || '').split(/\s*[&/]\s*/).filter(Boolean);
+  const colors = parts.length > 1 ? parts.map(swatchColor).filter(Boolean) : [];
+  if (colors.length > 1) {
+    const step = 360 / colors.length;
+    return `conic-gradient(${colors.map((c, i) => `${c} ${i * step}deg ${(i + 1) * step}deg`).join(', ')})`;
+  }
+  return swatchColor(name);
 }
 
 function renderDetail(id) {
@@ -812,7 +823,7 @@ function colorOptions(brand, query) {
 function swatchElement(name) {
   const el = document.createElement('span');
   el.className = 'swatch';
-  const color = swatchColor(name);
+  const color = swatchFill(name);
   if (color) el.style.setProperty('--swatch', color);
   return el;
 }
