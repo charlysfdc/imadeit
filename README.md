@@ -4,6 +4,8 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 **Free. No account. No ads. No tracking.** Everything stays on your own phone.
 
+**Open the app:** https://imadeit.afrikanerinamerika.com
+
 ## What it does
 
 - Log each blanket with photos, a blanket number, start and finish dates, size, stitches wide, rows, stitch, yarn (brand, colour, skeins) and notes
@@ -16,7 +18,7 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 ## Installing it on your phone
 
-1. Open the app's link in **Safari** (iPhone) or **Chrome** (Android).
+1. Open https://imadeit.afrikanerinamerika.com in **Safari** (iPhone) or **Chrome** (Android).
 2. iPhone: tap **Share**, then **Add to Home Screen**. Android: tap the menu (⋮), then **Install app**.
 3. Open ImadeIt from your Home Screen and start logging there.
 
@@ -26,13 +28,21 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 ImadeIt has no server. Blankets and photos are stored in your browser's on-device storage (IndexedDB). Nothing is sent anywhere. The only way data leaves the phone is a backup file that you save yourself.
 
-## Hosting it (GitHub Pages)
+## Hosting it (GitHub Pages + custom domain)
 
-The app is plain HTML, CSS and JavaScript with no build step.
+The app is plain HTML, CSS and JavaScript with no build step. It's served by GitHub Pages at
+`imadeit.afrikanerinamerika.com` (set by the `CNAME` file).
 
-1. In the repository on GitHub, go to **Settings → Pages**.
-2. Under **Build and deployment**, choose **Deploy from a branch**, pick the branch and the `/ (root)` folder, and save.
-3. After a minute the app is live at `https://<your-username>.github.io/<repo-name>/`.
+1. **GitHub:** in the repository, go to **Settings → Pages**. Under **Build and deployment**, choose
+   **Deploy from a branch**, pick the branch and the `/ (root)` folder, and save.
+2. **DNS (Cloudflare):** add a record of type `CNAME`, name `imadeit`, target `charlysfdc.github.io`,
+   with the proxy turned **off** (grey cloud, "DNS only") so GitHub can issue the HTTPS certificate.
+3. **GitHub again:** in **Settings → Pages**, enter `imadeit.afrikanerinamerika.com` as the custom domain,
+   wait for the DNS check to pass, then tick **Enforce HTTPS**.
+
+Changing the domain later moves the app to a new address, and browsers keep each address's data
+separately. Anyone already using it would need to save a backup and restore it at the new address, so pick
+the domain once and keep it.
 
 ## Making changes
 
