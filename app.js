@@ -2,13 +2,16 @@ import { db } from './db.js';
 import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
 import { attachAutocomplete, matchScore } from './autocomplete.js';
 import { YARN_LINES } from './yarn-catalog.js';
+import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
+import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 
-const APP_VERSION = '1.3.3';
+const APP_VERSION = '1.4.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
 const state = {
   blankets: [],
+  patterns: [],
   settings: { unit: 'in' },
   lastBackup: null,
   changesSinceBackup: 0,
@@ -72,8 +75,9 @@ function normalize(blanket) {
   return {
     plannedWidth: '',
     plannedLength: '',
-    patternUrl: '',
-    patternFile: null,
+    patternId: '',
+    patternSize: '',
+    rowsDone: 0,
     ...b,
     patternName: b.patternName ?? stitch ?? '',
     yarns: (b.yarns || []).map((y) => ({
@@ -150,6 +154,7 @@ const isIOS = () =>
 const icon = {
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+  next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   camera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
@@ -157,6 +162,8 @@ const icon = {
   file: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
   link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
   external: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>',
+  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>',
+  book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>',
   shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
 };
 
@@ -169,9 +176,72 @@ const logo = `<svg class="logo" viewBox="0 0 512 512" aria-hidden="true"><rect w
 
 async function load() {
   state.blankets = (await db.all('blankets')).map(normalize);
+  state.patterns = await db.all('patterns');
+  await movePatternsIntoLibrary();
   state.settings = { unit: 'in', ...((await db.getMeta('settings')) || {}) };
   state.lastBackup = (await db.getMeta('lastBackup')) || null;
   state.changesSinceBackup = (await db.getMeta('changesSinceBackup')) || 0;
+}
+
+// ---------- Pattern library ----------
+
+const builtInPattern = (id) => RUSTIC_PATTERNS.find((p) => p.id === id);
+const libraryPattern = (id) => state.patterns.find((p) => p.id === id);
+const patternById = (id) => (id ? builtInPattern(id) || libraryPattern(id) : null);
+const blanketsWithPattern = (id) => state.blankets.filter((b) => b.patternId === id);
+
+function findPatternByName(name) {
+  const key = (name || '').trim().toLowerCase();
+  if (!key) return null;
+  return RUSTIC_PATTERNS.find((p) => p.name.toLowerCase() === key)
+    || state.patterns.find((p) => p.name.toLowerCase() === key)
+    || null;
+}
+
+async function savePattern(pattern) {
+  await db.put('patterns', pattern);
+  const i = state.patterns.findIndex((x) => x.id === pattern.id);
+  if (i >= 0) state.patterns[i] = pattern;
+  else state.patterns.push(pattern);
+  // Blankets show the pattern's current name in lists and search.
+  for (const b of blanketsWithPattern(pattern.id)) {
+    if (b.patternName !== pattern.name) await saveBlanket({ ...b, patternName: pattern.name }, { quiet: true });
+  }
+}
+
+// Before 1.4 each blanket held its own pattern link and file. Those become library patterns,
+// one per pattern name, and the blankets point at them.
+async function movePatternsIntoLibrary() {
+  const loose = state.blankets.filter((b) => !b.patternId && (b.patternName || b.patternUrl || b.patternFile));
+  for (const b of loose) {
+    const name = (b.patternName || b.patternFile?.name?.replace(/\.[a-z0-9]+$/i, '') || 'Pattern').trim();
+    let pattern = findPatternByName(name);
+    if (pattern && builtInPattern(pattern.id)) {
+      if (b.patternFile) await db.remove('files', b.patternFile.id);
+    } else if (pattern) {
+      const changes = {};
+      if (!pattern.url && b.patternUrl) changes.url = b.patternUrl;
+      if (b.patternFile) {
+        if (!pattern.file) changes.file = b.patternFile;
+        // "Make another" used to copy the file for each blanket; keep only one.
+        else if (pattern.file.id !== b.patternFile.id) await db.remove('files', b.patternFile.id);
+      }
+      if (Object.keys(changes).length) {
+        pattern = { ...pattern, ...changes, updatedAt: new Date().toISOString() };
+        await db.put('patterns', pattern);
+        state.patterns = state.patterns.map((x) => (x.id === pattern.id ? pattern : x));
+      }
+    } else {
+      const now = new Date().toISOString();
+      pattern = { id: uid(), name, url: b.patternUrl || '', file: b.patternFile || null, notes: '', createdAt: now, updatedAt: now };
+      await db.put('patterns', pattern);
+      state.patterns.push(pattern);
+    }
+    const { patternUrl, patternFile, ...rest } = b;
+    const moved = { ...rest, patternId: pattern.id, patternName: pattern.name };
+    await db.put('blankets', moved);
+    state.blankets = state.blankets.map((x) => (x.id === b.id ? moved : x));
+  }
 }
 
 async function noteChange() {
@@ -274,7 +344,10 @@ function renderHome() {
   app.innerHTML = `
     <header class="top">
       <div class="brand">${logo}<div><h1>ImadeIt</h1><p>by Rustic Nastalje</p></div></div>
-      <a class="icon-btn" href="#/settings" aria-label="Settings and backups">${icon.gear}</a>
+      <div class="top-actions">
+        <a class="icon-btn" href="#/patterns" aria-label="Patterns">${icon.book}</a>
+        <a class="icon-btn" href="#/settings" aria-label="Settings and backups">${icon.gear}</a>
+      </div>
     </header>
     ${backupBanner()}
     ${installHint()}
@@ -543,17 +616,42 @@ function renderDetail(id) {
           ${p ? `<span>${has(y.used) ? `planned ${round(p)}` : `${round(p)} planned`}</span>` : ''}</div></li>`;
       }).join('')}</ul>` : '';
 
-  const patternSection = b.patternName || b.patternUrl || b.patternFile ? `
+  const pattern = patternById(b.patternId);
+  const builtIn = builtInPattern(b.patternId);
+  const patternSection = builtIn ? `
       <h3>Pattern</h3>
       <div class="pattern">
-        ${b.patternName ? `<p class="pattern-name">${esc(b.patternName)}</p>` : ''}
-        ${b.patternUrl ? `<a class="pattern-row" href="${esc(b.patternUrl)}" target="_blank" rel="noopener noreferrer">
-            ${icon.link}<span><strong>Open pattern link</strong><small>${esc(hostOf(b.patternUrl))}</small></span>${icon.external}</a>` : ''}
-        ${b.patternFile ? `<div class="pattern-row">
-            ${icon.file}<span><strong>${esc(b.patternFile.name)}</strong><small>${fileSize(b.patternFile.size)}</small></span>
-            <a class="btn small primary" id="pattern-open" target="_blank" rel="noopener">Open</a>
-            <button class="btn small ghost" id="pattern-save">Save</button></div>` : ''}
-      </div>` : '';
+        <a class="pattern-row" href="#/rn/${builtIn.id}">
+          ${icon.book}<span><strong>${esc(builtIn.name)}</strong><small>Free pattern by ${esc(builtIn.designer)}${b.patternSize ? ` · ${esc(b.patternSize)}` : ''}</small></span>${icon.next}</a>
+      </div>`
+    : pattern ? `
+      <h3>Pattern</h3>
+      <div class="pattern">
+        <a class="pattern-row" href="#/p/${pattern.id}">
+          ${icon.book}<span><strong>${esc(pattern.name)}</strong><small>${plural(blanketsWithPattern(pattern.id).length, 'blanket')} made with it</small></span>${icon.next}</a>
+        ${patternLinkRow(pattern)}
+        ${patternFileRow(pattern)}
+      </div>`
+    : b.patternName ? `<h3>Pattern</h3><div class="pattern"><p class="pattern-name">${esc(b.patternName)}</p></div>` : '';
+
+  // While knitting: count rows, with the pattern's own instructions when it's a built-in pattern.
+  const totalRows = num(b.rows);
+  const rowsDone = Math.min(num(b.rowsDone), totalRows);
+  const nextRow = rowsDone + 1;
+  const rowCounter = !b.finished && totalRows ? `
+    <section class="tracker">
+      <div class="tracker-head"><h3>Row counter</h3><span>${rowsDone >= totalRows ? 'All rows done' : `Row ${nextRow} of ${totalRows}`}</span></div>
+      ${rowsDone < totalRows ? `
+        ${builtIn ? `<p class="row-step"><b>Row ${nextRow}:</b> ${esc(builtIn.row(nextRow, totalRows))}</p>` : ''}
+        <div class="meter" role="img" aria-label="${rowsDone} of ${totalRows} rows done"><span style="width:${(rowsDone / totalRows) * 100}%"></span></div>
+        <div class="skein-actions">
+          <button class="btn primary small" id="row-done">${icon.check} Done row ${nextRow}</button>
+          ${rowsDone > 0 ? '<button class="link" id="row-undo">Undo</button>' : ''}
+          <span class="skein-note">${plural(totalRows - rowsDone, 'row')} to go</span>
+        </div>`
+      : `<p class="fine">Every row is done.${builtIn ? ` Next: <a href="#/rn/${builtIn.id}">end your blanket</a> with the braided edge.` : ' Time to finish the edge.'}</p>
+        <button class="link" id="row-undo">Undo last row</button>`}
+    </section>` : '';
 
   const diary = yarns.flatMap((y) => (y.log || []).map((t, k) => ({ t, y, n: k + 1 })))
     .sort((a, b2) => b2.t.localeCompare(a.t));
@@ -576,6 +674,7 @@ function renderDetail(id) {
     <article class="detail">
       <p class="eyebrow">Blanket #${esc(b.number)} · ${esc(yearOf(b))}</p>
       <h2>${esc(nameOf(b))}</h2>
+      ${rowCounter}
       ${tracker}
       ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : ''}
       ${patternSection}
@@ -591,7 +690,18 @@ function renderDetail(id) {
 
   hydratePhotos();
   app.querySelectorAll('[data-open]').forEach((btn) => btn.addEventListener('click', () => openPhoto(btn.dataset.open)));
-  if (b.patternFile) preparePatternFile(b.patternFile);
+  if (pattern?.file) preparePatternFile(pattern.file);
+
+  const setRows = async (n, message) => {
+    await saveBlanket({ ...b, rowsDone: Math.max(0, Math.min(totalRows, n)), updatedAt: new Date().toISOString() });
+    if (message) toast(message);
+    renderDetail(id);
+  };
+  document.getElementById('row-done')?.addEventListener('click', () => {
+    if (navigator.vibrate) navigator.vibrate(15);
+    setRows(rowsDone + 1, nextRow === totalRows ? 'Last row done!' : `Row ${nextRow} done`);
+  });
+  document.getElementById('row-undo')?.addEventListener('click', () => setRows(rowsDone - 1, `Back to row ${rowsDone}`));
 
   const updateYarn = async (i, change, message) => {
     const updatedYarns = yarns.map((y, k) => (k === i ? change({ ...y, log: [...(y.log || [])] }) : y));
@@ -622,13 +732,24 @@ function renderDetail(id) {
       await db.remove('photos', p);
       forgetPhoto(p);
     }
-    if (b.patternFile) await db.remove('files', b.patternFile.id);
     await db.remove('blankets', b.id);
     state.blankets = state.blankets.filter((x) => x.id !== b.id);
     await noteChange();
     toast('Blanket deleted');
     location.hash = '#/';
   });
+}
+
+function patternLinkRow(pattern) {
+  return pattern.url ? `<a class="pattern-row" href="${esc(pattern.url)}" target="_blank" rel="noopener noreferrer">
+      ${icon.link}<span><strong>Open pattern link</strong><small>${esc(hostOf(pattern.url))}</small></span>${icon.external}</a>` : '';
+}
+
+function patternFileRow(pattern) {
+  return pattern.file ? `<div class="pattern-row">
+      ${icon.file}<span><strong>${esc(pattern.file.name)}</strong><small>${fileSize(pattern.file.size)}</small></span>
+      <a class="btn small primary" id="pattern-open" target="_blank" rel="noopener">Open</a>
+      <button class="btn small ghost" id="pattern-save">Save</button></div>` : '';
 }
 
 // Phones only open or share a file straight from a tap, so the file is loaded before it's tapped.
@@ -740,12 +861,12 @@ function showLightbox(url) {
   document.body.appendChild(box);
 }
 
-async function saveBlanket(b) {
+async function saveBlanket(b, { quiet = false } = {}) {
   await db.put('blankets', b);
   const i = state.blankets.findIndex((x) => x.id === b.id);
   if (i >= 0) state.blankets[i] = b;
   else state.blankets.push(b);
-  await noteChange();
+  if (!quiet) await noteChange();
   requestPersistence();
 }
 
@@ -831,7 +952,8 @@ function swatchElement(name) {
 
 // ---------- Add / edit ----------
 
-function renderForm(id, copyFromId) {
+// preset fills a new blanket from a pattern: { patternId, patternSize, size, plannedWidth, plannedLength, stitchesWide, rows }.
+function renderForm(id, copyFromId, preset = null) {
   const existing = id ? state.blankets.find((x) => x.id === id) : null;
   if (id && !existing) return renderMissing();
   const source = copyFromId ? state.blankets.find((x) => x.id === copyFromId) : null;
@@ -849,14 +971,17 @@ function renderForm(id, copyFromId) {
         plannedLength: source ? (has(source.length) ? source.length : source.plannedLength) : '',
         width: '', length: '',
         stitchesWide: source?.stitchesWide ?? '', rows: source?.rows ?? '',
-        patternName: source?.patternName || '', patternUrl: source?.patternUrl || '',
-        // The copy gets its own copy of the pattern file, so deleting one blanket never removes the other's.
-        patternFile: source?.patternFile ? { ...source.patternFile, id: uid(), copyFrom: source.patternFile.id } : null,
+        patternId: source?.patternId || '', patternName: source?.patternName || '', patternSize: source?.patternSize || '', rowsDone: 0,
         yarns: (source?.yarns || []).map((y) => ({
           ...emptyYarn(), brand: y.brand, color: y.color, planned: num(y.used) ? y.used : y.planned,
         })),
         notes: '', photos: [], createdAt: now,
       };
+  if (preset && !existing) {
+    const p = patternById(preset.patternId);
+    Object.assign(b, preset, { patternName: p ? p.name : '' });
+    if (!b.title && p) b.title = preset.patternSize ? `${p.name} (${preset.patternSize})` : p.name;
+  }
   if (!b.yarns.length) b.yarns.push(emptyYarn());
   // Each yarn row keeps its skein diary while the form is open, even if rows are added or removed.
   b.yarns = b.yarns.map((y) => ({ ...y, key: uid() }));
@@ -866,7 +991,9 @@ function renderForm(id, copyFromId) {
   unsavedChanges = false;
   const heading = existing ? `Edit #${b.number}` : source ? 'Make another' : 'New blanket';
   const unit = unitLabel();
-  let patternFile = b.patternFile ? { ...b.patternFile } : null;
+  // Only used when the pattern name is new: it becomes a library pattern on save.
+  let patternFile = null;
+  let newPatternUrl = '';
 
   app.innerHTML = `
     <header class="bar">
@@ -925,11 +1052,9 @@ function renderForm(id, copyFromId) {
 
       <section class="group">
         <h3>Pattern <em class="optional">optional</em></h3>
-        <label class="field"><span>Pattern name</span>
-          <input name="patternName" list="pattern-list" value="${esc(b.patternName)}" placeholder="e.g. Chunky garter throw, or “my own”" autocomplete="off" autocapitalize="sentences"></label>
-        <label class="field"><span>Link</span>
-          <input name="patternUrl" type="url" inputmode="url" value="${esc(b.patternUrl)}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-        <div id="pattern-file"></div>
+        <div class="field"><label for="pattern-name">Pattern</label>
+          <div class="ac"><input id="pattern-name" name="patternName" value="${esc(b.patternName)}" placeholder="Pick one of your patterns, or type a new one" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></div></div>
+        <div id="pattern-extra"></div>
       </section>
 
       <section class="group">
@@ -944,7 +1069,6 @@ function renderForm(id, copyFromId) {
         <textarea name="notes" rows="5" placeholder="Anything worth remembering: who it was for, what you'd change, why it took longer…">${esc(b.notes)}</textarea>
       </section>
 
-      ${datalist('pattern-list', suggestions((x) => [x.patternName]))}
 
       <div class="save-bar"><button type="submit" class="btn primary block" id="save">Save blanket</button></div>
     </form>`;
@@ -1055,15 +1179,45 @@ function renderForm(id, copyFromId) {
     });
   }
 
-  const fileBox = document.getElementById('pattern-file');
+  const patternInput = document.getElementById('pattern-name');
+  const extraBox = document.getElementById('pattern-extra');
+  let extraFor = null;
+  function drawPatternExtra() {
+    if (!extraBox.isConnected) return;
+    const name = patternInput.value.trim();
+    const match = findPatternByName(name);
+    const built = match && builtInPattern(match.id);
+    // Redraw only when the pattern changes, so a link being typed isn't wiped.
+    const key = match ? match.id : name ? 'new' : '';
+    if (key === extraFor) return;
+    extraFor = key;
+    if (!name) {
+      extraBox.innerHTML = '';
+    } else if (match) {
+      const bits = built
+        ? [`Free pattern by ${built.designer}`, match.id === b.patternId && b.patternSize ? b.patternSize : '']
+        : [match.url ? 'link' : '', match.file ? 'file' : '', plural(blanketsWithPattern(match.id).length, 'blanket')];
+      extraBox.innerHTML = `<div class="file-chip">${icon.book}
+          <span><strong>From ${built ? 'Rustic Nastalje' : 'your patterns'}</strong><small>${esc(bits.filter(Boolean).join(' · '))}</small></span></div>`;
+    } else {
+      extraBox.innerHTML = `
+        <p class="hint group-hint">New pattern. It's saved to your patterns so you can pick it next time.</p>
+        <label class="field"><span>Link <em>optional</em></span>
+          <input id="pattern-url" type="url" inputmode="url" value="${esc(newPatternUrl)}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <div id="pattern-file"></div>`;
+      document.getElementById('pattern-url').addEventListener('input', (e) => { newPatternUrl = e.target.value; });
+      drawPatternFile();
+    }
+  }
   function drawPatternFile() {
+    const fileBox = document.getElementById('pattern-file');
+    if (!fileBox) return;
     fileBox.innerHTML = patternFile
       ? `<div class="file-chip">${icon.file}
           <span><strong>${esc(patternFile.name)}</strong><small>${fileSize(patternFile.size)}</small></span>
           <button type="button" class="link danger-text" id="remove-pattern">Remove</button></div>`
       : `<label class="btn ghost small file-btn">${icon.file} Attach a pattern file
-          <input type="file" id="pattern-input" accept="application/pdf,.pdf,image/*,.doc,.docx,.txt,.rtf,.pages"></label>
-        <p class="hint">A PDF, photo or document. It's kept on this phone with the blanket.</p>`;
+          <input type="file" id="pattern-input" accept="application/pdf,.pdf,image/*,.doc,.docx,.txt,.rtf,.pages"></label>`;
     document.getElementById('remove-pattern')?.addEventListener('click', () => {
       patternFile = null;
       unsavedChanges = true;
@@ -1071,24 +1225,21 @@ function renderForm(id, copyFromId) {
     });
     const input = document.getElementById('pattern-input');
     input?.addEventListener('change', async () => {
-      const file = input.files[0];
+      const picked = await readPatternFile(input.files[0]);
       input.value = '';
-      if (!file) return;
-      if (file.size > MAX_PATTERN_FILE) {
-        toast('That file is too big. Patterns can be up to 30 MB.');
-        return;
-      }
-      // Copied into a plain Blob: some iPhones can't store the picked File itself.
-      const blob = new Blob([await file.arrayBuffer()], { type: file.type });
-      patternFile = { id: uid(), name: file.name, type: file.type, size: file.size, blob };
+      if (!picked) return;
+      patternFile = picked;
       unsavedChanges = true;
       drawPatternFile();
     });
   }
+  attachAutocomplete(patternInput, { getOptions: patternOptions, onPick: drawPatternExtra });
+  patternInput.addEventListener('input', drawPatternExtra);
+  patternInput.addEventListener('blur', () => setTimeout(drawPatternExtra, 0));
 
   drawYarns(b.yarns);
   drawPhotos();
-  drawPatternFile();
+  drawPatternExtra();
 
   form.addEventListener('input', () => { unsavedChanges = true; });
   document.getElementById('add-yarn').addEventListener('click', () => {
@@ -1118,8 +1269,10 @@ function renderForm(id, copyFromId) {
       toast('The finish date is before the start date.');
       return;
     }
-    const patternUrl = safeURL(data.get('patternUrl'));
-    if ((data.get('patternUrl') || '').trim() && !patternUrl) {
+    const patternName = (data.get('patternName') || '').trim();
+    let pattern = findPatternByName(patternName);
+    const patternUrl = safeURL(newPatternUrl);
+    if (!pattern && newPatternUrl.trim() && !patternUrl) {
       toast("That pattern link doesn't look right. It should start with https://");
       return;
     }
@@ -1140,19 +1293,11 @@ function renderForm(id, copyFromId) {
           forgetPhoto(old);
         }
       }
-      let fileMeta = null;
-      if (patternFile) {
-        if (patternFile.blob) {
-          await db.put('files', { id: patternFile.id, blob: patternFile.blob });
-        } else if (patternFile.copyFrom) {
-          const original = await db.get('files', patternFile.copyFrom);
-          if (original) await db.put('files', { id: patternFile.id, blob: original.blob });
-        }
-        const { id: fid, name, type, size } = patternFile;
-        fileMeta = { id: fid, name, type, size };
+      if (!pattern && patternName) {
+        const now = new Date().toISOString();
+        pattern = { id: uid(), name: patternName, url: patternUrl, file: await storePatternFile(patternFile), notes: '', createdAt: now, updatedAt: now };
+        await savePattern(pattern);
       }
-      const oldFile = existing?.patternFile?.id;
-      if (oldFile && oldFile !== fileMeta?.id) await db.remove('files', oldFile);
 
       const saved = {
         ...b,
@@ -1167,9 +1312,9 @@ function renderForm(id, copyFromId) {
         length: numberOrBlank(data.get('length')),
         stitchesWide: numberOrBlank(data.get('stitchesWide')),
         rows: numberOrBlank(data.get('rows')),
-        patternName: (data.get('patternName') || '').trim(),
-        patternUrl,
-        patternFile: fileMeta,
+        patternId: pattern ? pattern.id : '',
+        patternName: pattern ? pattern.name : '',
+        patternSize: pattern && pattern.id === b.patternId ? b.patternSize : '',
         yarns: readYarns()
           .filter((y) => y.brand || y.color || has(y.planned) || has(y.used))
           .map(({ key, ...y }) => y),
@@ -1189,6 +1334,461 @@ function renderForm(id, copyFromId) {
       document.getElementById('save').disabled = false;
     }
   });
+}
+
+// ---------- Patterns ----------
+
+function patternOptions(query) {
+  const options = RUSTIC_PATTERNS.map((p) => ({ value: p.name, note: 'Free · Rustic Nastalje' }));
+  for (const p of state.patterns) {
+    const made = blanketsWithPattern(p.id).length;
+    options.push({ value: p.name, note: made ? `Made ${made}×` : 'Your pattern' });
+  }
+  return rankOptions(options, query, query.trim() ? 8 : 60);
+}
+
+async function readPatternFile(file) {
+  if (!file) return null;
+  if (file.size > MAX_PATTERN_FILE) {
+    toast(`${file.name} is too big. Pattern files can be up to 30 MB.`);
+    return null;
+  }
+  // Copied into a plain Blob: some iPhones can't store the picked File itself.
+  const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+  return { id: uid(), name: file.name, type: file.type, size: file.size, blob };
+}
+
+async function storePatternFile(picked) {
+  if (!picked) return null;
+  await db.put('files', { id: picked.id, blob: picked.blob });
+  const { id, name, type, size } = picked;
+  return { id, name, type, size };
+}
+
+// "LodgePlaid-FingerKnitBlanketPattern.pdf" and "Pattern Lodge Plaid (Breadcrumb) v2 - Etsy upload.pdf"
+// both become "Lodge Plaid", so several versions of one pattern are added only once.
+function nameFromFile(filename) {
+  const name = filename
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[_]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\(\s*breadcrumb\s*\)/gi, ' ')
+    .replace(/[-–]\s*etsy upload/gi, ' ')
+    .replace(/\bv\d+\b/gi, ' ')
+    .replace(/\b(finger|arm|hand)\s*knit(ted)?\s*(blanket\s*)?pattern\b/gi, ' ')
+    .replace(/^\s*pattern\b[\s:-]*/i, '')
+    .replace(/[\s:-]*\bpattern\s*$/i, '')
+    .replace(/\s*-\s*$/, '')
+    .replace(/^\s*-\s*/, '')
+    .replace(/\s*-\s*/g, ' - ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return name || filename.replace(/\.[a-z0-9]+$/i, '') || 'Pattern';
+}
+
+function renderPatterns() {
+  const mine = [...state.patterns].sort((a, b) => a.name.localeCompare(b.name));
+  app.innerHTML = `
+    <header class="bar">
+      <a class="icon-btn" href="#/" aria-label="Back to all blankets">${icon.back}</a>
+      <span class="bar-title">Patterns</span>
+      <a class="text-btn" href="#/pnew">Add</a>
+    </header>
+    <section class="free-pattern">
+      <p class="eyebrow">Free with ImadeIt</p>
+      ${RUSTIC_PATTERNS.map((p) => `
+        <a class="free-card" href="#/rn/${p.id}">
+          <span class="free-art">${logo}</span>
+          <span><strong>${esc(p.name)}</strong><small>by ${esc(p.designer)} · ${plural(p.sizes.length, 'size')}</small></span>
+          ${icon.next}
+        </a>`).join('')}
+    </section>
+    <section class="library">
+      <h2>My patterns <span>${mine.length || ''}</span></h2>
+      ${mine.length ? `<ul class="pattern-list">${mine.map((p) => {
+        const made = blanketsWithPattern(p.id).length;
+        const bits = [made ? `Made ${made}×` : 'Not made yet', p.file ? 'File' : '', p.url ? hostOf(p.url) : ''].filter(Boolean);
+        return `<li><a href="#/p/${p.id}">${icon.book}<span><strong>${esc(p.name)}</strong><small>${esc(bits.join(' · '))}</small></span>${icon.next}</a></li>`;
+      }).join('')}</ul>`
+      : `<p class="fine">Save each pattern once: its name, a link, or the PDF. Then pick it whenever you start a blanket.</p>`}
+      <div class="library-actions">
+        <a class="btn primary block" href="#/pnew">${icon.plus} New pattern</a>
+        <label class="btn ghost block file-btn">${icon.file} Add pattern files
+          <input type="file" id="bulk-files" multiple accept="application/pdf,.pdf,image/*,.doc,.docx,.txt,.rtf,.pages"></label>
+        <p class="fine">Pick several PDFs at once from Files or Google Drive. Each one becomes a pattern, named after the file.</p>
+      </div>
+    </section>
+    <p class="shop-line"><a href="${SHOP_URL}" target="_blank" rel="noopener">More Breadcrumb patterns by Rustic Nastalje on Etsy ${icon.external}</a></p>`;
+
+  const bulk = document.getElementById('bulk-files');
+  bulk.addEventListener('change', async () => {
+    const files = [...bulk.files];
+    bulk.value = '';
+    if (!files.length) return;
+    toast(`Adding ${plural(files.length, 'pattern')}…`);
+    let added = 0;
+    const skipped = [];
+    for (const file of files) {
+      const name = nameFromFile(file.name);
+      if (findPatternByName(name)) {
+        skipped.push(name);
+        continue;
+      }
+      const picked = await readPatternFile(file);
+      if (!picked) continue;
+      const now = new Date().toISOString();
+      await savePattern({ id: uid(), name, url: '', file: await storePatternFile(picked), notes: '', createdAt: now, updatedAt: now });
+      added += 1;
+    }
+    await noteChange();
+    requestPersistence();
+    renderPatterns();
+    toast(`${plural(added, 'pattern')} added${skipped.length ? `. Already had ${skipped.length}` : ''}`);
+  });
+}
+
+function renderPatternDetail(id) {
+  const p = libraryPattern(id);
+  if (!p) return renderMissing();
+  const made = blanketsWithPattern(id).sort((a, b) => (Number(b.number) || 0) - (Number(a.number) || 0));
+  const done = made.filter((b) => b.finished);
+  const avg = (vals) => (vals.length ? round(vals.reduce((n, v) => n + v, 0) / vals.length) : null);
+  const avgSkeins = avg(done.map(usedOf).filter((n) => n > 0));
+  const avgDays = avg(done.map(daysTaken).filter(Boolean));
+  const sizes = done.map((b) => dimsText(b.width, b.length)).filter(Boolean);
+
+  app.innerHTML = `
+    <header class="bar">
+      <a class="icon-btn" href="#/patterns" aria-label="Back to patterns">${icon.back}</a>
+      <span class="bar-title">Pattern</span>
+      <a class="text-btn" href="#/pedit/${p.id}">Edit</a>
+    </header>
+    <article class="detail">
+      <p class="eyebrow">My pattern</p>
+      <h2>${esc(p.name)}</h2>
+      ${p.url || p.file ? `<div class="pattern">${patternLinkRow(p)}${patternFileRow(p)}</div>` : ''}
+      ${done.length ? `<dl class="facts">
+        <div><dt>Made</dt><dd>${plural(made.length, 'time')}</dd></div>
+        <div><dt>Skeins, on average</dt><dd>${avgSkeins ?? '–'}</dd></div>
+        <div><dt>Days, on average</dt><dd>${avgDays ?? '–'}</dd></div>
+        <div><dt>Last finished size</dt><dd>${esc(sizes[0] || '–')}</dd></div>
+      </dl>` : ''}
+      ${p.notes ? `<h3>Notes</h3><p class="notes">${esc(p.notes)}</p>` : ''}
+      <a class="btn primary block start-btn" href="#/newp/${p.id}">${icon.plus} Start a blanket with this pattern</a>
+      ${made.length ? `<h3>Made with this pattern</h3><div class="grid">${made.map(card).join('')}</div>` : ''}
+      <div class="actions"><button class="btn danger block" id="delete-pattern">Delete this pattern</button></div>
+    </article>`;
+  hydratePhotos();
+  if (p.file) preparePatternFile(p.file);
+  document.getElementById('delete-pattern').addEventListener('click', async () => {
+    const note = made.length ? ` ${plural(made.length, 'blanket')} made with it will keep the pattern's name.` : '';
+    if (!confirm(`Delete the pattern “${p.name}”?${note}`)) return;
+    if (p.file) await db.remove('files', p.file.id);
+    for (const b of made) await saveBlanket({ ...b, patternId: '' }, { quiet: true });
+    await db.remove('patterns', p.id);
+    state.patterns = state.patterns.filter((x) => x.id !== p.id);
+    await noteChange();
+    toast('Pattern deleted');
+    location.hash = '#/patterns';
+  });
+}
+
+function renderPatternForm(id) {
+  const existing = id ? libraryPattern(id) : null;
+  if (id && !existing) return renderMissing();
+  let file = existing?.file ? { ...existing.file } : null;
+  unsavedChanges = false;
+
+  app.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn" id="cancel" aria-label="Cancel">${icon.back}</button>
+      <span class="bar-title">${existing ? 'Edit pattern' : 'New pattern'}</span>
+      <span></span>
+    </header>
+    <form id="pattern-form" class="form" novalidate>
+      <section class="group">
+        <label class="field"><span>Pattern name</span>
+          <input name="name" value="${esc(existing?.name || '')}" placeholder="e.g. Lodge Plaid" autocomplete="off" autocapitalize="words" required></label>
+        <label class="field"><span>Link <em>optional</em></span>
+          <input name="url" type="url" inputmode="url" value="${esc(existing?.url || '')}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <div id="file-box"></div>
+      </section>
+      <section class="group">
+        <h3>Notes</h3>
+        <textarea name="notes" rows="5" placeholder="Cast on counts, yarn that works well, changes you always make…">${esc(existing?.notes || '')}</textarea>
+      </section>
+      <div class="save-bar"><button type="submit" class="btn primary block" id="save">Save pattern</button></div>
+    </form>`;
+
+  const form = document.getElementById('pattern-form');
+  const box = document.getElementById('file-box');
+  const drawFile = () => {
+    box.innerHTML = file
+      ? `<div class="file-chip">${icon.file}<span><strong>${esc(file.name)}</strong><small>${fileSize(file.size)}</small></span>
+          <button type="button" class="link danger-text" id="remove-file">Remove</button></div>`
+      : `<label class="btn ghost small file-btn">${icon.file} Attach a pattern file
+          <input type="file" id="file-input" accept="application/pdf,.pdf,image/*,.doc,.docx,.txt,.rtf,.pages"></label>`;
+    document.getElementById('remove-file')?.addEventListener('click', () => { file = null; unsavedChanges = true; drawFile(); });
+    const input = document.getElementById('file-input');
+    input?.addEventListener('change', async () => {
+      const picked = await readPatternFile(input.files[0]);
+      input.value = '';
+      if (!picked) return;
+      file = picked;
+      unsavedChanges = true;
+      const nameField = form.querySelector('[name=name]');
+      if (!nameField.value.trim()) nameField.value = nameFromFile(picked.name);
+      drawFile();
+    });
+  };
+  drawFile();
+  form.addEventListener('input', () => { unsavedChanges = true; });
+  document.getElementById('cancel').addEventListener('click', () => {
+    if (unsavedChanges && !confirm('Leave without saving your changes?')) return;
+    unsavedChanges = false;
+    location.hash = existing ? `#/p/${existing.id}` : '#/patterns';
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    const name = (data.get('name') || '').trim();
+    if (!name) {
+      toast('Give the pattern a name.');
+      return;
+    }
+    const other = findPatternByName(name);
+    if (other && other.id !== existing?.id) {
+      toast(`You already have a pattern called “${other.name}”.`);
+      return;
+    }
+    const url = safeURL(data.get('url'));
+    if ((data.get('url') || '').trim() && !url) {
+      toast("That link doesn't look right. It should start with https://");
+      return;
+    }
+    const fileMeta = file?.blob ? await storePatternFile(file) : file;
+    if (existing?.file && existing.file.id !== fileMeta?.id) await db.remove('files', existing.file.id);
+    const now = new Date().toISOString();
+    const saved = { id: existing?.id || uid(), createdAt: existing?.createdAt || now, name, url, file: fileMeta, notes: (data.get('notes') || '').trim(), updatedAt: now };
+    await savePattern(saved);
+    await noteChange();
+    requestPersistence();
+    unsavedChanges = false;
+    toast(existing ? 'Pattern saved' : 'Pattern added');
+    location.hash = `#/p/${saved.id}`;
+  });
+}
+
+// The free Breadcrumb pattern, readable in the app, with a size picker that sets up the blanket.
+function renderBuiltInPattern(id) {
+  const p = builtInPattern(id);
+  if (!p) return renderMissing();
+  const made = blanketsWithPattern(id);
+  let chosen = p.sizes.length - 1;
+  const unit = unitLabel();
+  const show = (inches) => (unit === 'cm' ? Math.round(inches * 2.54) : inches);
+
+  app.innerHTML = `
+    <header class="bar">
+      <a class="icon-btn" href="#/patterns" aria-label="Back to patterns">${icon.back}</a>
+      <span class="bar-title">Free pattern</span>
+      <span></span>
+    </header>
+    <article class="detail breadcrumb">
+      <p class="eyebrow">A Breadcrumb pattern by ${esc(p.designer)}</p>
+      <h2>${esc(p.name)}</h2>
+      <p class="lede">${esc(p.summary)}</p>
+      <p class="fine">${esc(p.tagline)}</p>
+
+      <h3>Pick your size</h3>
+      <div class="size-picker" role="radiogroup" aria-label="Size">
+        ${p.sizes.map((z, i) => `
+          <button type="button" class="size-option${i === chosen ? ' on' : ''}" role="radio" aria-checked="${i === chosen}" data-size="${i}">
+            <strong>${esc(z.name)}</strong>
+            <span>${show(z.width)} × ${show(z.length)} ${unit}</span>
+            <small>${z.loops} loops · ${z.rows} rows</small>
+          </button>`).join('')}
+      </div>
+      <a class="btn primary block start-btn" id="start" href="#/newrn/${p.id}/${chosen}">${icon.plus} Start this blanket</a>
+      <p class="fine">Sets up a new blanket with this size's loops and rows. The row counter then shows each row's instruction as you go.${made.length ? ` You've started it ${plural(made.length, 'time')}.` : ''}</p>
+
+      <h3>You'll need</h3>
+      <ul class="plain">${p.supplies.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+      ${p.yarnLink ? `<p><a href="${esc(p.yarnLink)}" target="_blank" rel="noopener">Shop the yarn ${icon.external}</a></p>` : ''}
+
+      <h3>Rows</h3>
+      <ol class="rows-list">
+        <li><b>Cast on:</b> make a slipknot and chain the loops for your size.</li>
+        <li><b>Row 1:</b> ${esc(p.row(1, 42))}</li>
+        <li><b>Every row after:</b> ${esc(p.row(2, 42))}</li>
+        ${p.sizes.map((z) => `<li class="stop"><b>Row ${z.rows}:</b> last row for ${esc(z.name)}. Make these loops about four fingers wide.</li>`).join('')}
+      </ol>
+
+      ${p.sections.map((sec) => `
+        <details class="pattern-step"${sec.title === 'Before you start' ? ' open' : ''}>
+          <summary>${esc(sec.title)}</summary>
+          ${sec.body.map((line) => `<p>${esc(line)}</p>`).join('')}
+        </details>`).join('')}
+
+      <p class="terms">${esc(p.terms)}</p>
+      <p class="shop-line"><a href="${SHOP_URL}" target="_blank" rel="noopener">More Breadcrumb patterns by Rustic Nastalje on Etsy ${icon.external}</a></p>
+    </article>`;
+
+  const start = document.getElementById('start');
+  app.querySelectorAll('[data-size]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      chosen = Number(btn.dataset.size);
+      app.querySelectorAll('[data-size]').forEach((x) => {
+        x.classList.toggle('on', x === btn);
+        x.setAttribute('aria-checked', String(x === btn));
+      });
+      start.href = `#/newrn/${p.id}/${chosen}`;
+    }));
+}
+
+function presetForBuiltIn(id, sizeIndex) {
+  const p = builtInPattern(id);
+  const z = p && p.sizes[Number(sizeIndex)];
+  if (!z) return null;
+  const cm = state.settings.unit === 'cm';
+  const conv = (inches) => (cm ? Math.round(inches * 2.54) : inches);
+  return {
+    patternId: p.id, patternSize: z.name, size: z.size,
+    plannedWidth: conv(z.width), plannedLength: conv(z.length), stitchesWide: z.loops, rows: z.rows,
+  };
+}
+
+// ---------- Spreadsheets ----------
+
+function spreadsheetRows(blankets) {
+  const rows = [COLUMNS.map((c) => c.label)];
+  const sorted = [...blankets].sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
+  for (const b of sorted) {
+    const base = {
+      number: b.number, title: b.title, started: b.started, finished: b.finished, size: b.size,
+      plannedWidth: b.plannedWidth, plannedLength: b.plannedLength, width: b.width, length: b.length,
+      stitchesWide: b.stitchesWide, rows: b.rows, pattern: patternById(b.patternId)?.name || b.patternName, notes: b.notes,
+    };
+    const yarns = (b.yarns || []).length ? b.yarns : [{}];
+    for (const y of yarns) {
+      const row = { ...base, brand: y.brand, color: y.color, planned: y.planned, used: y.used };
+      rows.push(COLUMNS.map((c) => row[c.key] ?? ''));
+    }
+  }
+  return rows;
+}
+
+async function exportSpreadsheet() {
+  const file = new File([toCSV(spreadsheetRows(state.blankets))], `ImadeIt-blankets-${today()}.csv`, { type: 'text/csv' });
+  await shareOrDownload(file, 'ImadeIt blankets');
+}
+
+async function downloadTemplate() {
+  const example = [
+    { number: 1, title: 'Sage garter throw', started: '2026-10-21', finished: '2026-10-25', size: 'Throw', plannedWidth: 50, plannedLength: 60, width: 48, length: 63, stitchesWide: 22, rows: 42, pattern: 'The Rustic Blanket', brand: 'Bernat Blanket Big', color: 'Sage', planned: 6, used: 6.5, notes: 'Example row: replace with your own' },
+    { number: 1, title: 'Sage garter throw', brand: 'Bernat Blanket Big', color: 'Vintage White', planned: 1, used: 1 },
+  ];
+  const rows = [COLUMNS.map((c) => c.label), ...example.map((r) => COLUMNS.map((c) => r[c.key] ?? ''))];
+  await shareOrDownload(new File([toCSV(rows)], 'ImadeIt-template.csv', { type: 'text/csv' }), 'ImadeIt template');
+}
+
+async function importSpreadsheet(file) {
+  let table;
+  try {
+    table = parseCSV(await file.text());
+  } catch {
+    toast("That file couldn't be read. Save the sheet as CSV and try again.");
+    return;
+  }
+  if (table.length < 2) {
+    toast('That spreadsheet has no rows to import.');
+    return;
+  }
+  const { map, unknown } = mapHeadings(table[0]);
+  if (!('title' in map) && !('number' in map) && !('color' in map) && !('brand' in map)) {
+    toast('No columns were recognised. Start from the blank template to see the column names.');
+    return;
+  }
+  const get = (row, key) => (key in map ? (row[map[key]] || '').trim() : '');
+
+  // Rows with the same Blanket # are one blanket; a row without a number starts a new blanket.
+  const groups = [];
+  const byNumber = new Map();
+  for (const row of table.slice(1)) {
+    const n = parseNumber(get(row, 'number'));
+    let group = n !== '' ? byNumber.get(n) : null;
+    if (!group) {
+      group = { number: n, rows: [] };
+      groups.push(group);
+      if (n !== '') byNumber.set(n, group);
+    }
+    group.rows.push(row);
+  }
+
+  let nextNumber = state.blankets.reduce((max, b) => Math.max(max, Number(b.number) || 0), 0) + 1;
+  const now = new Date().toISOString();
+  const blankets = [];
+  let duplicates = 0;
+  for (const g of groups) {
+    const first = g.rows[0];
+    const pick = (key) => g.rows.map((r) => get(r, key)).find(Boolean) || '';
+    const title = pick('title');
+    if (g.number !== '' && state.blankets.some((b) => Number(b.number) === g.number && (b.title || '') === title)) {
+      duplicates += 1;
+      continue;
+    }
+    const yarns = g.rows
+      .map((r) => ({ ...emptyYarn(), brand: get(r, 'brand'), color: get(r, 'color'), planned: parseNumber(get(r, 'planned')), used: parseNumber(get(r, 'used')) }))
+      .filter((y) => y.brand || y.color || has(y.planned) || has(y.used));
+    blankets.push({
+      ...normalize({}),
+      id: uid(),
+      number: g.number !== '' ? g.number : nextNumber++,
+      title,
+      started: parseDate(get(first, 'started') || pick('started')),
+      finished: parseDate(get(first, 'finished') || pick('finished')),
+      size: pick('size'),
+      plannedWidth: parseNumber(pick('plannedWidth')),
+      plannedLength: parseNumber(pick('plannedLength')),
+      width: parseNumber(pick('width')),
+      length: parseNumber(pick('length')),
+      stitchesWide: parseNumber(pick('stitchesWide')),
+      rows: parseNumber(pick('rows')),
+      patternName: pick('pattern'),
+      yarns,
+      notes: g.rows.map((r) => get(r, 'notes')).filter(Boolean).join('\n'),
+      photos: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  if (!blankets.length) {
+    toast(duplicates ? 'Those blankets are already in ImadeIt.' : 'No blankets found in that spreadsheet.');
+    return;
+  }
+  const details = [
+    duplicates ? `${plural(duplicates, 'blanket')} already here will be skipped.` : '',
+    unknown.length ? `Columns not used: ${unknown.join(', ')}.` : '',
+  ].filter(Boolean).join(' ');
+  if (!confirm(`Import ${plural(blankets.length, 'blanket')} from this spreadsheet?${details ? `\n\n${details}` : ''}`)) return;
+
+  for (const b of blankets) {
+    if (b.patternName) {
+      let pattern = findPatternByName(b.patternName);
+      if (!pattern) {
+        pattern = { id: uid(), name: b.patternName, url: '', file: null, notes: '', createdAt: now, updatedAt: now };
+        await savePattern(pattern);
+      }
+      b.patternId = pattern.id;
+      b.patternName = pattern.name;
+    }
+    await saveBlanket(b, { quiet: true });
+  }
+  await noteChange();
+  requestPersistence();
+  toast(`Imported ${plural(blankets.length, 'blanket')}`);
+  location.hash = '#/';
 }
 
 // ---------- Settings & backups ----------
@@ -1221,6 +1821,16 @@ function renderSettings() {
       </section>
 
       <section class="panel">
+        <h3>Spreadsheets</h3>
+        <p>Already keep your blankets in Google Sheets, Excel or Numbers? Save it as a CSV file and bring it in. One row per yarn colour; rows with the same Blanket # become one blanket.</p>
+        <label class="btn primary block file-btn">Import from a spreadsheet
+          <input type="file" accept=".csv,text/csv,text/plain" id="import-csv"></label>
+        <button class="btn ghost block" id="csv-template">Get a blank template</button>
+        <button class="btn ghost block" id="export-csv"${state.blankets.length ? '' : ' disabled'}>Download my blankets as a spreadsheet</button>
+        <p class="fine">Spreadsheets hold the words and numbers only. Use “Save a backup” to keep photos and pattern files too.</p>
+      </section>
+
+      <section class="panel">
         <h3>Measurements</h3>
         <div class="segmented" role="radiogroup" aria-label="Units">
           <button class="${unit === 'in' ? 'on' : ''}" data-unit="in" role="radio" aria-checked="${unit === 'in'}">Inches</button>
@@ -1249,6 +1859,7 @@ function renderSettings() {
         ${logo}
         <p><b>ImadeIt</b> is a free gift from <b>Rustic Nastalje</b>, made by a chunky blanket knitter for chunky blanket knitters.</p>
         <p class="fine">Yarn brand and colour names are listed only to describe yarn. ImadeIt isn't affiliated with or endorsed by any yarn brand.</p>
+        <p class="fine"><a href="${SHOP_URL}" target="_blank" rel="noopener">Patterns by Rustic Nastalje on Etsy</a></p>
         <p class="fine">Version ${APP_VERSION}</p>
       </section>
 
@@ -1260,6 +1871,14 @@ function renderSettings() {
     </div>`;
 
   document.getElementById('export').addEventListener('click', exportBackup);
+  document.getElementById('export-csv').addEventListener('click', exportSpreadsheet);
+  document.getElementById('csv-template').addEventListener('click', downloadTemplate);
+  const csvInput = document.getElementById('import-csv');
+  csvInput.addEventListener('change', async () => {
+    const file = csvInput.files[0];
+    csvInput.value = '';
+    if (file) await importSpreadsheet(file);
+  });
   const importInput = document.getElementById('import');
   importInput.addEventListener('change', async () => {
     const file = importInput.files[0];
@@ -1280,6 +1899,7 @@ function renderSettings() {
     await db.clear('blankets');
     await db.clear('photos');
     await db.clear('files');
+    await db.clear('patterns');
     await db.setMeta('changesSinceBackup', 0);
     for (const url of photoURLs.values()) URL.revokeObjectURL(url);
     photoURLs.clear();
@@ -1306,7 +1926,7 @@ async function exportBackup() {
   const files = await db.all('files');
   const payload = {
     app: 'ImadeIt',
-    format: 2,
+    format: 3,
     exportedAt: new Date().toISOString(),
     settings: state.settings,
     blankets,
@@ -1316,6 +1936,7 @@ async function exportBackup() {
       thumb: await blobToDataURL(p.thumb),
     }))),
     files: await Promise.all(files.map(async (f) => ({ id: f.id, data: await blobToDataURL(f.blob) }))),
+    patterns: await db.all('patterns'),
   };
   const filename = `ImadeIt-backup-${today()}.json`;
   const file = new File([JSON.stringify(payload)], filename, { type: 'application/json' });
@@ -1350,6 +1971,7 @@ async function importBackup(file) {
       await db.put('photos', { id: p.id, full: await dataURLToBlob(p.full), thumb: await dataURLToBlob(p.thumb) });
       forgetPhoto(p.id);
     }
+    for (const pattern of data.patterns || []) await db.put('patterns', pattern);
     for (const f of data.files || []) {
       await db.put('files', { id: f.id, blob: await dataURLToBlob(f.data) });
     }
@@ -1375,6 +1997,16 @@ const routes = [
   [/^#\/again\/([\w-]+)$/, (m) => renderForm(null, m[1])],
   [/^#\/finish\/([\w-]+)$/, (m) => renderFinish(m[1])],
   [/^#\/settings$/, () => renderSettings()],
+  [/^#\/patterns$/, () => renderPatterns()],
+  [/^#\/p\/([\w-]+)$/, (m) => renderPatternDetail(m[1])],
+  [/^#\/pnew$/, () => renderPatternForm()],
+  [/^#\/pedit\/([\w-]+)$/, (m) => renderPatternForm(m[1])],
+  [/^#\/rn\/([\w-]+)$/, (m) => renderBuiltInPattern(m[1])],
+  [/^#\/newp\/([\w-]+)$/, (m) => (libraryPattern(m[1]) ? renderForm(null, null, { patternId: m[1] }) : renderMissing())],
+  [/^#\/newrn\/([\w-]+)\/(\d+)$/, (m) => {
+    const preset = presetForBuiltIn(m[1], m[2]);
+    return preset ? renderForm(null, null, preset) : renderMissing();
+  }],
 ];
 
 let lastHash = null;
