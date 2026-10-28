@@ -3,7 +3,7 @@ import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
 import { attachAutocomplete, matchScore } from './autocomplete.js';
 import { YARN_LINES } from './yarn-catalog.js';
 
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -1248,6 +1248,7 @@ function renderSettings() {
       <section class="panel about">
         ${logo}
         <p><b>ImadeIt</b> is a free gift from <b>Rustic Nastalje</b>, made by a chunky blanket knitter for chunky blanket knitters.</p>
+        <p class="fine">Yarn brand and colour names are listed only to describe yarn. ImadeIt isn't affiliated with or endorsed by any yarn brand.</p>
         <p class="fine">Version ${APP_VERSION}</p>
       </section>
 
