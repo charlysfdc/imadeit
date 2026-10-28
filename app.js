@@ -3,7 +3,7 @@ import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
 import { attachAutocomplete, matchScore } from './autocomplete.js';
 import { YARN_LINES } from './yarn-catalog.js';
 
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -405,7 +405,9 @@ const YARN_COLORS = {
   taupe: '#a39382', sage: '#9caf88', blush: '#e8c4c4', 'dusty rose': '#d3a1a1', rose: '#d99a9a', mauve: '#b58da0',
   mustard: '#d4a537', rust: '#b5562f', terracotta: '#c0673f', burgundy: '#7a2335', forest: '#3f5e3a',
   denim: '#5b7896', charcoal: '#3f3f45', espresso: '#4a3426', camel: '#c19a6b', blue: '#6f8fb5', lilac: '#c3b1d6',
-  lavender: '#b9a7d6', mint: '#bfe0cc', khaki: '#b9a77f', teal: '#3f8f8b', navy: '#2f3d5c', ivory: '#f6f0dc', white: '#f7f4ee', black: '#2b2b2b', grey: '#9a9a9a', gray: '#9a9a9a',
+  lavender: '#b9a7d6', mint: '#bfe0cc', khaki: '#b9a77f', teal: '#3f8f8b', navy: '#2f3d5c',
+  green: '#6f9a5e', red: '#b3443a', pink: '#eaa9b6', purple: '#8a6aa8', yellow: '#e8c95a', orange: '#e08a3c',
+  brown: '#7a5a43', tan: '#c8a97e', ivory: '#f6f0dc', white: '#f7f4ee', black: '#2b2b2b', grey: '#9a9a9a', gray: '#9a9a9a',
 };
 
 function swatchColor(name) {
@@ -414,11 +416,10 @@ function swatchColor(name) {
   if (YARN_COLORS[text]) return YARN_COLORS[text];
   const compact = text.replace(/\s+/g, '');
   if (window.CSS && CSS.supports('color', compact)) return compact;
-  const words = text.split(/[\s/&,-]+/).reverse();
-  for (const w of words) {
-    if (YARN_COLORS[w]) return YARN_COLORS[w];
-    if (/^[a-z]+$/.test(w) && window.CSS && CSS.supports('color', w)) return w;
-  }
+  // Yarn words first, in the order they're written, so "Sage Green" is sage rather than plain green.
+  const words = text.split(/[\s/&,-]+/).filter(Boolean);
+  for (const w of words) if (YARN_COLORS[w]) return YARN_COLORS[w];
+  for (const w of words) if (/^[a-z]+$/.test(w) && window.CSS && CSS.supports('color', w)) return w;
   return '';
 }
 
