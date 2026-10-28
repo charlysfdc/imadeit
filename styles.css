@@ -839,9 +839,3 @@ textarea { resize: vertical; line-height: 1.5; }
 
 /* Row counter */
 .row-step { margin: 10px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); font-size: 1rem; }
-
-/* Moving to a new address */
-.moving ol { margin: 8px 0 0; padding-left: 20px; font-size: 0.92rem; display: grid; gap: 4px; }
-.moving-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.moving-actions .btn { margin-top: 0; }
-.panels .moving { margin-bottom: 14px; }

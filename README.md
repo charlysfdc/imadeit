@@ -4,7 +4,7 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 **Free. No account. No ads. No tracking.** Everything stays on your own phone.
 
-**Open the app:** https://imadeit.afrikanerinamerika.com
+**Open the app:** https://imadeit.rusticnastalje.com
 
 ## What it does
 
@@ -26,7 +26,7 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 
 ## Installing it on your phone
 
-1. Open https://imadeit.afrikanerinamerika.com in **Safari** (iPhone) or **Chrome** (Android).
+1. Open https://imadeit.rusticnastalje.com in **Safari** (iPhone) or **Chrome** (Android).
 2. iPhone: tap **Share**, then **Add to Home Screen**. Android: tap the menu (⋮), then **Install app**.
 3. Open ImadeIt from your Home Screen and start logging there.
 
@@ -43,13 +43,13 @@ ImadeIt has no server. Blankets and photos are stored in your browser's on-devic
 ## Hosting it (GitHub Pages + custom domain)
 
 The app is plain HTML, CSS and JavaScript with no build step. It's served by GitHub Pages at
-`imadeit.afrikanerinamerika.com` (set by the `CNAME` file).
+`imadeit.rusticnastalje.com` (set by the `CNAME` file).
 
 1. **GitHub:** in the repository, go to **Settings → Pages**. Under **Build and deployment**, choose
    **Deploy from a branch**, pick the branch and the `/ (root)` folder, and save.
 2. **DNS (Cloudflare):** add a record of type `CNAME`, name `imadeit`, target `charlysfdc.github.io`,
    with the proxy turned **off** (grey cloud, "DNS only") so GitHub can issue the HTTPS certificate.
-3. **GitHub again:** in **Settings → Pages**, enter `imadeit.afrikanerinamerika.com` as the custom domain,
+3. **GitHub again:** in **Settings → Pages**, enter `imadeit.rusticnastalje.com` as the custom domain,
    wait for the DNS check to pass, then tick **Enforce HTTPS**.
 
 Changing the domain later moves the app to a new address, and browsers keep each address's data

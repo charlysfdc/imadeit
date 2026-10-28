@@ -5,10 +5,7 @@ import { YARN_LINES } from './yarn-catalog.js';
 import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 
-const APP_VERSION = '1.4.1';
-const HOME_URL = 'https://imadeit.rusticnastalje.com';
-// Earlier addresses. Blankets saved there stay there, so the app explains how to bring them across.
-const OLD_HOSTS = ['imadeit.afrikanerinamerika.com'];
+const APP_VERSION = '1.4.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -303,23 +300,6 @@ const datalist = (id, values) => `<datalist id="${id}">${values.map((v) => `<opt
 
 // ---------- Home: the blanket log ----------
 
-function movingNotice() {
-  if (!OLD_HOSTS.includes(location.hostname)) return '';
-  return `<aside class="notice warm moving">
-      <div><strong>ImadeIt has a new home</strong>
-      <p>It now lives at <b>imadeit.rusticnastalje.com</b>. Your blankets don't move on their own, so bring them across:</p>
-      <ol>
-        <li>Save a backup here.</li>
-        <li>Open the new address and add it to your Home Screen.</li>
-        <li>In its Settings, tap <b>Restore from a backup</b> and pick that file.</li>
-      </ol>
-      <div class="moving-actions">
-        <button class="btn small primary" data-action="backup">Save a backup</button>
-        <a class="btn small ghost" href="${HOME_URL}" target="_blank" rel="noopener">Open the new address</a>
-      </div></div>
-    </aside>`;
-}
-
 function backupBanner() {
   if (state.backupBannerHidden || !state.blankets.length) return '';
   const daysSince = state.lastBackup ? Math.floor((Date.now() - new Date(state.lastBackup)) / 86400000) : null;
@@ -369,8 +349,7 @@ function renderHome() {
         <a class="icon-btn" href="#/settings" aria-label="Settings and backups">${icon.gear}</a>
       </div>
     </header>
-    ${movingNotice()}
-    ${movingNotice() ? '' : backupBanner()}
+    ${backupBanner()}
     ${installHint()}
     ${total ? `
       <section class="stats" aria-label="Your totals">
@@ -1831,7 +1810,6 @@ function renderSettings() {
       <span></span>
     </header>
     <div class="panels">
-      ${movingNotice()}
       <section class="panel">
         <h3>Backups</h3>
         <p>Your blankets live only on this phone. A backup is one file holding every blanket and photo. Save it to Files, iCloud Drive or Google Drive, or email it to yourself.</p>
@@ -1893,7 +1871,6 @@ function renderSettings() {
     </div>`;
 
   document.getElementById('export').addEventListener('click', exportBackup);
-  app.querySelector('.moving [data-action="backup"]')?.addEventListener('click', exportBackup);
   document.getElementById('export-csv').addEventListener('click', exportSpreadsheet);
   document.getElementById('csv-template').addEventListener('click', downloadTemplate);
   const csvInput = document.getElementById('import-csv');
