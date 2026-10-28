@@ -1,7 +1,9 @@
 import { db } from './db.js';
 import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
+import { attachAutocomplete, matchScore } from './autocomplete.js';
+import { YARN_LINES } from './yarn-catalog.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -741,6 +743,80 @@ function renderMissing() {
     <section class="empty"><h2>That blanket isn't here</h2><p>It may have been deleted.</p><a class="btn primary" href="#/">Back to my blankets</a></section>`;
 }
 
+// ---------- Yarn suggestions ----------
+
+// Brands and colours already used in this notebook, so anything typed once is offered again.
+function yarnHistory() {
+  const brands = new Map();
+  const colorsByBrand = new Map();
+  const allColors = new Map();
+  for (const b of state.blankets) {
+    for (const y of b.yarns || []) {
+      const brand = (y.brand || '').trim();
+      const color = (y.color || '').trim();
+      if (brand) brands.set(brand.toLowerCase(), brand);
+      if (color) {
+        allColors.set(color.toLowerCase(), color);
+        const key = brand.toLowerCase();
+        if (!colorsByBrand.has(key)) colorsByBrand.set(key, new Map());
+        colorsByBrand.get(key).set(color.toLowerCase(), color);
+      }
+    }
+  }
+  return { brands, colorsByBrand, allColors };
+}
+
+// "Bernat Blanket" finds that line; plain "Bernat" finds every Bernat line.
+function catalogLinesFor(brand) {
+  const q = brand.trim().toLowerCase();
+  if (!q) return [];
+  const exact = YARN_LINES.filter((l) => l.display.toLowerCase() === q);
+  return exact.length ? exact : YARN_LINES.filter((l) => l.brand.toLowerCase() === q);
+}
+
+function rankOptions(options, query, limit) {
+  return options
+    .map((o) => ({ ...o, score: matchScore(o.value, query) }))
+    .filter((o) => o.score > 0)
+    .sort((a, b) => b.score - a.score || Number(Boolean(b.mine)) - Number(Boolean(a.mine)) || a.value.localeCompare(b.value))
+    .slice(0, limit);
+}
+
+function brandOptions(query) {
+  const options = new Map();
+  for (const value of yarnHistory().brands.values()) options.set(value.toLowerCase(), { value, mine: true });
+  for (const line of YARN_LINES) {
+    const key = line.display.toLowerCase();
+    if (!options.has(key)) options.set(key, { value: line.display, note: line.weight });
+  }
+  return rankOptions([...options.values()], query, query.trim() ? 8 : 60);
+}
+
+function colorOptions(brand, query) {
+  const history = yarnHistory();
+  const options = new Map();
+  const mine = brand.trim()
+    ? history.colorsByBrand.get(brand.trim().toLowerCase()) || new Map()
+    : history.allColors;
+  for (const value of mine.values()) options.set(value.toLowerCase(), { value, mine: true });
+  for (const line of catalogLinesFor(brand)) {
+    for (const value of line.colors) {
+      if (!options.has(value.toLowerCase())) options.set(value.toLowerCase(), { value });
+    }
+  }
+  // An unknown brand still gets the colours used with any brand before.
+  if (!options.size) for (const value of history.allColors.values()) options.set(value.toLowerCase(), { value, mine: true });
+  return rankOptions([...options.values()], query, query.trim() ? 10 : 200);
+}
+
+function swatchElement(name) {
+  const el = document.createElement('span');
+  el.className = 'swatch';
+  const color = swatchColor(name);
+  if (color) el.style.setProperty('--swatch', color);
+  return el;
+}
+
 // ---------- Add / edit ----------
 
 function renderForm(id, copyFromId) {
@@ -857,8 +933,6 @@ function renderForm(id, copyFromId) {
       </section>
 
       ${datalist('pattern-list', suggestions((x) => [x.patternName]))}
-      ${datalist('brand-list', suggestions((x) => (x.yarns || []).map((y) => y.brand)))}
-      ${datalist('color-list', suggestions((x) => (x.yarns || []).map((y) => y.color)))}
 
       <div class="save-bar"><button type="submit" class="btn primary block" id="save">Save blanket</button></div>
     </form>`;
@@ -881,12 +955,10 @@ function renderForm(id, copyFromId) {
   function drawYarns(yarns) {
     yarnBox.innerHTML = yarns.map((y, i) => `
       <div class="yarn" data-key="${y.key}">
-        <div class="row">
-          <label class="field"><span>Colour</span>
-            <input data-k="color" list="color-list" value="${esc(y.color)}" placeholder="e.g. Sage" autocomplete="off" autocapitalize="words"></label>
-          <label class="field"><span>Brand / line</span>
-            <input data-k="brand" list="brand-list" value="${esc(y.brand)}" placeholder="e.g. Bernat" autocomplete="off" autocapitalize="words"></label>
-        </div>
+        <div class="field"><label for="brand-${y.key}">Brand / line</label>
+          <div class="ac"><input id="brand-${y.key}" data-k="brand" value="${esc(y.brand)}" placeholder="Start typing, e.g. Bernat" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" enterkeyhint="next"></div></div>
+        <div class="field"><label for="color-${y.key}">Colour</label>
+          <div class="ac"><input id="color-${y.key}" data-k="color" value="${esc(y.color)}" placeholder="Pick or type a colour" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" enterkeyhint="next"></div></div>
         <div class="row">
           <label class="field"><span>Planned skeins</span>
             <input data-k="planned" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.planned)}"></label>
@@ -895,6 +967,20 @@ function renderForm(id, copyFromId) {
         </div>
         ${yarns.length > 1 ? `<button type="button" class="link danger-text" data-remove-yarn="${i}">Remove this yarn</button>` : ''}
       </div>`).join('');
+    yarnBox.querySelectorAll('.yarn').forEach((row) => {
+      const brand = row.querySelector('[data-k="brand"]');
+      const color = row.querySelector('[data-k="color"]');
+      attachAutocomplete(brand, {
+        getOptions: brandOptions,
+        // Picking a brand goes straight on to its colours.
+        onPick: () => color.focus(),
+      });
+      attachAutocomplete(color, {
+        getOptions: (q) => colorOptions(brand.value, q),
+        renderSwatch: swatchElement,
+        onPick: () => row.querySelector('[data-k="planned"]').focus(),
+      });
+    });
     yarnBox.querySelectorAll('[data-remove-yarn]').forEach((btn) =>
       btn.addEventListener('click', () => {
         const list = readYarns();

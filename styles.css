@@ -558,7 +558,42 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .row > * { flex: 1; min-width: 0; }
 .row > .narrow { flex: 0 0 34%; }
 .field { display: block; margin-bottom: 12px; }
-.field > span { display: block; font-size: 0.82rem; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+.field > span, .field > label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+
+/* Type-ahead lists for yarn brand and colour */
+.ac { position: relative; }
+.ac input { scroll-margin-top: 90px; }
+.ac-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 264px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgba(59, 42, 32, 0.18);
+}
+.ac-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.ac-list li[aria-selected='true'] { background: var(--surface-2); }
+@media (hover: hover) { .ac-list li:hover { background: var(--surface-2); } }
+.ac-text { flex: 1; min-width: 0; }
+.ac-list small { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
+.ac-list .swatch { width: 24px; height: 24px; }
 .field em { font-style: normal; font-weight: 400; }
 .field input, textarea {
   display: block;

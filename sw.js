@@ -1,6 +1,6 @@
 // Keeps ImadeIt working with no internet. Bump VERSION whenever any app file changes
 // so installed copies pick up the new version the next time they open.
-const VERSION = 'imadeit-v1.2.0';
+const VERSION = 'imadeit-v1.3.0';
 const FILES = [
   './',
   './index.html',
@@ -8,6 +8,8 @@ const FILES = [
   './app.js',
   './db.js',
   './images.js',
+  './autocomplete.js',
+  './yarn-catalog.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
