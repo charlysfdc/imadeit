@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import { preparePhoto, blobToDataURL, dataURLToBlob } from './images.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const STITCHES = ['Garter', 'Stockinette', 'Basketweave', 'Waffle', 'Ribbed', 'Seed / Moss', 'Checkerboard', 'Herringbone', 'Braided border', 'Bobble'];
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 
@@ -55,7 +55,28 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const numberOrBlank = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? '' : Number(v));
 const nameOf = (b) => (b.title && b.title.trim()) || `Blanket #${b.number}`;
 const yearOf = (b) => (b.finished || b.started || b.createdAt || '').slice(0, 4) || 'Undated';
-const skeinsOf = (b) => (b.yarns || []).reduce((n, y) => n + (Number(y.skeins) || 0), 0);
+const has = (v) => v !== '' && v != null;
+const num = (v) => Number(v) || 0;
+const round = (n) => Math.round(num(n) * 100) / 100;
+const usedOf = (b) => (b.yarns || []).reduce((n, y) => n + num(y.used), 0);
+const plannedOf = (b) => (b.yarns || []).reduce((n, y) => n + num(y.planned), 0);
+const emptyYarn = () => ({ brand: '', color: '', planned: '', used: '', log: [] });
+
+// Version 1.0 stored one "skeins" number per yarn; it meant skeins used.
+function normalize(b) {
+  return {
+    plannedWidth: '',
+    plannedLength: '',
+    ...b,
+    yarns: (b.yarns || []).map((y) => ({
+      brand: y.brand || '',
+      color: y.color || '',
+      planned: y.planned ?? '',
+      used: y.used ?? y.skeins ?? '',
+      log: Array.isArray(y.log) ? y.log : [],
+    })),
+  };
+}
 const unitLabel = () => (state.settings.unit === 'cm' ? 'cm' : 'in');
 
 function readLocal(key) {
@@ -95,7 +116,7 @@ const logo = `<svg class="logo" viewBox="0 0 512 512" aria-hidden="true"><rect w
 // ---------- Data ----------
 
 async function load() {
-  state.blankets = await db.all('blankets');
+  state.blankets = (await db.all('blankets')).map(normalize);
   state.settings = { unit: 'in', ...((await db.getMeta('settings')) || {}) };
   state.lastBackup = (await db.getMeta('lastBackup')) || null;
   state.changesSinceBackup = (await db.getMeta('changesSinceBackup')) || 0;
@@ -195,7 +216,7 @@ function renderHome() {
   const year = String(new Date().getFullYear());
   const total = state.blankets.length;
   const thisYear = state.blankets.filter((b) => yearOf(b) === year).length;
-  const skeins = state.blankets.reduce((n, b) => n + skeinsOf(b), 0);
+  const skeins = state.blankets.reduce((n, b) => n + usedOf(b), 0);
   const inProgress = state.blankets.filter((b) => !b.finished).length;
 
   app.innerHTML = `
@@ -304,7 +325,12 @@ function renderResults() {
 function card(b) {
   const cover = b.photos && b.photos[0];
   const detail = [b.stitch, b.size].filter(Boolean).join(' · ');
-  const when = b.finished ? fmtDate(b.finished) : b.started ? `Started ${fmtDate(b.started)}` : '';
+  const planned = plannedOf(b);
+  const when = b.finished
+    ? fmtDate(b.finished)
+    : planned
+      ? `Skein ${round(usedOf(b))} of ${round(planned)}`
+      : b.started ? `Started ${fmtDate(b.started)}` : '';
   return `<a class="card" href="#/b/${b.id}">
       <div class="thumb">
         ${cover ? `<img data-photo="${cover}" alt="">` : '<div class="knit"></div>'}
@@ -344,23 +370,124 @@ function swatchColor(name) {
   return '';
 }
 
+const swatch = (y) => {
+  const color = swatchColor(y.color);
+  return `<span class="swatch"${color ? ` style="--swatch:${color}"` : ''}></span>`;
+};
+
+const yarnName = (y) =>
+  `<div class="yarn-name"><strong>${esc(y.color || y.brand || 'Yarn')}</strong>${y.color && y.brand ? `<span>${esc(y.brand)}</span>` : ''}</div>`;
+
+function dimsText(w, l) {
+  return has(w) || has(l) ? `${has(w) ? round(w) : '?'} × ${has(l) ? round(l) : '?'} ${unitLabel()}` : '';
+}
+
+function sizeDiff(b) {
+  const unit = unitLabel();
+  const parts = [];
+  let compared = false;
+  if (has(b.width) && has(b.plannedWidth)) {
+    compared = true;
+    const d = round(num(b.width) - num(b.plannedWidth));
+    if (d) parts.push(`${Math.abs(d)} ${unit} ${d > 0 ? 'wider' : 'narrower'}`);
+  }
+  if (has(b.length) && has(b.plannedLength)) {
+    compared = true;
+    const d = round(num(b.length) - num(b.plannedLength));
+    if (d) parts.push(`${Math.abs(d)} ${unit} ${d > 0 ? 'longer' : 'shorter'}`);
+  }
+  if (!compared) return '';
+  return parts.length ? `${parts.join(' and ')} than planned` : 'Exactly the size you planned';
+}
+
+function skeinDiff(used, planned) {
+  const d = round(used - planned);
+  if (!d) return 'right on plan';
+  return d > 0 ? `${d} more than planned` : `${Math.abs(d)} fewer than planned`;
+}
+
 function renderDetail(id) {
   const b = state.blankets.find((x) => x.id === id);
   if (!b) return renderMissing();
 
   const days = daysTaken(b);
-  const dims = b.width || b.length ? `${b.width || '?'} × ${b.length || '?'} ${unitLabel()}` : '';
+  const dayNumber = !b.finished && b.started && b.started <= today() ? daysTaken({ started: b.started, finished: today() }) : null;
   const facts = [
     ['Started', fmtDate(b.started)],
-    ['Finished', b.finished ? fmtDate(b.finished) : 'Still on the go'],
+    ['Finished', b.finished ? fmtDate(b.finished) : 'Still in progress'],
     ['Took', days ? plural(days, 'day') : ''],
-    ['Size', [b.size, dims].filter(Boolean).join(' · ')],
+    ['Size', b.size],
     ['Stitches wide', b.stitchesWide],
     ['Rows', b.rows],
     ['Stitch', b.stitch],
-  ].filter(([, v]) => v !== '' && v != null);
-  const yarns = (b.yarns || []).filter((y) => y.brand || y.color || y.skeins);
-  const skeins = skeinsOf(b);
+  ].filter(([, v]) => has(v));
+
+  const yarns = b.yarns || [];
+  const used = usedOf(b);
+  const planned = plannedOf(b);
+  const plannedDims = dimsText(b.plannedWidth, b.plannedLength);
+  const finalDims = dimsText(b.width, b.length);
+
+  // While knitting: one big button per yarn to count skeins as they're joined.
+  const tracker = b.finished ? '' : `
+    <section class="tracker">
+      <div class="tracker-head"><h3>Skein tracker</h3>${dayNumber ? `<span>Day ${dayNumber}</span>` : ''}</div>
+      ${yarns.length ? `
+        <p class="fine">Tap <b>New skein</b> each time you join one. ImadeIt keeps count so you don't have to.</p>
+        ${yarns.map((y, i) => {
+          const u = num(y.used);
+          const p = num(y.planned);
+          const over = p && u > p;
+          return `<div class="skein${over ? ' over' : ''}">
+            <div class="skein-top">${swatch(y)}${yarnName(y)}
+              <div class="skein-count"><b>${round(u)}</b>${p ? `<span>of ${round(p)}</span>` : ''}</div>
+            </div>
+            ${p ? `<div class="meter" role="img" aria-label="${round(u)} of ${round(p)} skeins"><span style="width:${Math.min(100, (u / p) * 100)}%"></span></div>` : ''}
+            <div class="skein-actions">
+              <button class="btn primary small" data-skein="${i}">${icon.plus} New skein</button>
+              ${u > 0 ? `<button class="link" data-undo="${i}">Undo</button>` : ''}
+              <span class="skein-note">${p ? (over ? `${round(u - p)} over plan` : `${round(p - u)} left in plan`) : ''}</span>
+            </div>
+          </div>`;
+        }).join('')}
+        <a class="link" href="#/edit/${b.id}">Using a yarn you didn't plan? Add it</a>`
+      : `<p class="fine">Add the yarn you plan to use, and how many skeins of each, to count skeins as you go.</p>
+        <a class="btn ghost small" href="#/edit/${b.id}">${icon.plus} Add planned yarn</a>`}
+    </section>
+    <a class="btn sage block finish-btn" href="#/finish/${b.id}">I finished it!</a>`;
+
+  // Once finished: how the result compares with the plan.
+  const sizeSection = plannedDims && finalDims ? `
+      <h3>Size</h3>
+      <div class="compare">
+        <div><span>Planned</span><b>${esc(plannedDims)}</b></div>
+        <div><span>Finished</span><b>${esc(finalDims)}</b></div>
+        ${sizeDiff(b) ? `<p>${esc(sizeDiff(b))}</p>` : ''}
+      </div>`
+    : plannedDims || finalDims ? `
+      <h3>Size</h3>
+      <div class="compare single">
+        <div><span>${finalDims ? 'Finished' : 'Planned'}</span><b>${esc(finalDims || plannedDims)}</b></div>
+      </div>` : '';
+
+  const yarnSection = b.finished && yarns.length ? `
+      <h3>Yarn <span>${used ? `${plural(round(used), 'skein')} used` : ''}${used && planned ? ` · ${skeinDiff(used, planned)}` : !used && planned ? `${plural(round(planned), 'skein')} planned` : ''}</span></h3>
+      <ul class="yarns">${yarns.map((y) => {
+        const u = num(y.used);
+        const p = num(y.planned);
+        return `<li>${swatch(y)}${yarnName(y)}
+          <div class="yarn-used">${has(y.used) ? `<b>${plural(round(u), 'skein')}</b>` : ''}
+          ${p ? `<span>${has(y.used) ? `planned ${round(p)}` : `${round(p)} planned`}</span>` : ''}</div></li>`;
+      }).join('')}</ul>` : '';
+
+  const diary = yarns.flatMap((y) => (y.log || []).map((t, k) => ({ t, y, n: k + 1 })))
+    .sort((a, b2) => b2.t.localeCompare(a.t));
+  const diarySection = diary.length ? `
+      <details class="diary">
+        <summary>Skein diary <span>${plural(diary.length, 'skein')} logged</span></summary>
+        <ol>${diary.map(({ t, y, n }) => `<li>${swatch(y)}<span>${esc(y.color || y.brand || 'Yarn')}, skein ${n}</span>
+          <time datetime="${t}">${new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</time></li>`).join('')}</ol>
+      </details>` : '';
 
   app.innerHTML = `
     <header class="bar">
@@ -374,16 +501,11 @@ function renderDetail(id) {
     <article class="detail">
       <p class="eyebrow">Blanket #${esc(b.number)} · ${esc(yearOf(b))}</p>
       <h2>${esc(nameOf(b))}</h2>
-      ${b.finished ? '' : `<button class="btn small sage" id="finish">Mark finished today</button>`}
+      ${tracker}
       ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : ''}
-      ${yarns.length ? `
-        <h3>Yarn${skeins ? ` <span>${Math.round(skeins * 10) / 10} skeins in all</span>` : ''}</h3>
-        <ul class="yarns">${yarns.map((y) => {
-          const color = swatchColor(y.color);
-          return `<li><span class="swatch"${color ? ` style="--swatch:${color}"` : ''}></span>
-            <div><strong>${esc(y.brand || 'Yarn')}</strong>${y.color ? `<span>${esc(y.color)}</span>` : ''}</div>
-            ${y.skeins ? `<span class="skeins">${esc(plural(Number(y.skeins), 'skein'))}</span>` : ''}</li>`;
-        }).join('')}</ul>` : ''}
+      ${sizeSection}
+      ${yarnSection}
+      ${diarySection}
       ${b.notes ? `<h3>Notes</h3><p class="notes">${esc(b.notes)}</p>` : ''}
       <div class="actions">
         <a class="btn ghost block" href="#/again/${b.id}">Make another like this</a>
@@ -394,13 +516,28 @@ function renderDetail(id) {
   hydratePhotos();
   app.querySelectorAll('[data-open]').forEach((btn) => btn.addEventListener('click', () => openPhoto(btn.dataset.open)));
 
-  document.getElementById('finish')?.addEventListener('click', async () => {
-    const updated = { ...b, finished: today(), updatedAt: new Date().toISOString() };
-    if (updated.started && updated.started > updated.finished) updated.started = updated.finished;
-    await saveBlanket(updated);
-    toast('Finished! Well done.');
+  const updateYarn = async (i, change, message) => {
+    const updatedYarns = yarns.map((y, k) => (k === i ? change({ ...y, log: [...(y.log || [])] }) : y));
+    await saveBlanket({ ...b, yarns: updatedYarns, updatedAt: new Date().toISOString() });
+    toast(message(updatedYarns[i]));
     renderDetail(id);
-  });
+  };
+  app.querySelectorAll('[data-skein]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      if (navigator.vibrate) navigator.vibrate(15);
+      updateYarn(Number(btn.dataset.skein), (y) => {
+        y.used = round(num(y.used) + 1);
+        y.log.push(new Date().toISOString());
+        return y;
+      }, (y) => `${y.color || y.brand || 'Yarn'}: skein ${y.used} started`);
+    }));
+  app.querySelectorAll('[data-undo]').forEach((btn) =>
+    btn.addEventListener('click', () =>
+      updateYarn(Number(btn.dataset.undo), (y) => {
+        y.used = round(Math.max(0, num(y.used) - 1));
+        y.log.pop();
+        return y;
+      }, (y) => `Undone. ${y.color || y.brand || 'Yarn'} is back to ${plural(y.used, 'skein')}`)));
 
   document.getElementById('delete').addEventListener('click', async () => {
     if (!confirm(`Delete “${nameOf(b)}”? This can't be undone.`)) return;
@@ -413,6 +550,77 @@ function renderDetail(id) {
     await noteChange();
     toast('Blanket deleted');
     location.hash = '#/';
+  });
+}
+
+// ---------- Finishing: measure and count ----------
+
+function renderFinish(id) {
+  const b = state.blankets.find((x) => x.id === id);
+  if (!b) return renderMissing();
+  const unit = unitLabel();
+  const yarns = b.yarns || [];
+  const plannedDims = dimsText(b.plannedWidth, b.plannedLength);
+
+  app.innerHTML = `
+    <header class="bar">
+      <a class="icon-btn" href="#/b/${b.id}" aria-label="Back">${icon.back}</a>
+      <span class="bar-title">Finish #${esc(b.number)}</span>
+      <span></span>
+    </header>
+    <form id="finish-form" class="form" novalidate>
+      <section class="group celebrate">
+        <h3>Off your arms! Well done.</h3>
+        <p class="hint">Two quick things to record before it goes: how big it came out and how many skeins it took.</p>
+        <label class="field"><span>Finished on</span><input name="finished" type="date" value="${esc(b.finished || today())}"></label>
+      </section>
+
+      <section class="group">
+        <h3>Finished size</h3>
+        <p class="hint group-hint">Lay it flat and measure.${plannedDims ? ` You planned <b>${esc(plannedDims)}</b>.` : ''}</p>
+        <div class="dims">
+          <label class="field"><span>Width (${unit})</span>
+            <input name="width" type="number" inputmode="decimal" step="any" min="0" value="${esc(b.width)}" placeholder="${has(b.plannedWidth) ? esc(b.plannedWidth) : ''}"></label>
+          <span class="times">×</span>
+          <label class="field"><span>Length (${unit})</span>
+            <input name="length" type="number" inputmode="decimal" step="any" min="0" value="${esc(b.length)}" placeholder="${has(b.plannedLength) ? esc(b.plannedLength) : ''}"></label>
+        </div>
+      </section>
+
+      ${yarns.length ? `
+      <section class="group">
+        <h3>Skeins used</h3>
+        <p class="hint group-hint">This is the count from your skein tracker. Some left on the last skein? Type 5.5 for half a skein left over.</p>
+        ${yarns.map((y, i) => `
+          <div class="used-row">${swatch(y)}${yarnName(y)}
+            <label class="field"><span>${has(y.planned) ? `Planned ${round(y.planned)}` : 'Used'}</span>
+              <input data-used="${i}" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.used)}" aria-label="Skeins of ${esc(y.color || y.brand || 'yarn')} used"></label>
+          </div>`).join('')}
+      </section>` : ''}
+
+      <div class="save-bar"><button type="submit" class="btn primary block" id="save">Save finished blanket</button></div>
+    </form>`;
+
+  const form = document.getElementById('finish-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    const finished = data.get('finished') || today();
+    if (b.started && finished < b.started) {
+      toast('The finish date is before the start date.');
+      return;
+    }
+    const updatedYarns = yarns.map((y, i) => ({ ...y, used: numberOrBlank(form.querySelector(`[data-used="${i}"]`).value) }));
+    await saveBlanket({
+      ...b,
+      finished,
+      width: numberOrBlank(data.get('width')),
+      length: numberOrBlank(data.get('length')),
+      yarns: updatedYarns,
+      updatedAt: new Date().toISOString(),
+    });
+    toast('Finished! Well done.');
+    location.hash = `#/b/${b.id}`;
   });
 }
 
@@ -450,16 +658,26 @@ function renderForm(id, copyFromId) {
   const nextNumber = state.blankets.reduce((max, b) => Math.max(max, Number(b.number) || 0), 0) + 1;
   const now = new Date().toISOString();
 
-  // "Make another like this" copies the recipe (size, stitch, yarn) but not the photos, dates or notes.
+  // "Make another like this" turns what the old blanket actually came out as into the new plan.
+  // Photos, dates, notes and skein counts start fresh.
   const b = existing
     ? JSON.parse(JSON.stringify(existing))
     : {
         id: uid(), number: nextNumber, title: source ? source.title : '', started: today(), finished: '',
-        size: source?.size || '', width: source?.width ?? '', length: source?.length ?? '',
+        size: source?.size || '',
+        plannedWidth: source ? (has(source.width) ? source.width : source.plannedWidth) : '',
+        plannedLength: source ? (has(source.length) ? source.length : source.plannedLength) : '',
+        width: '', length: '',
         stitchesWide: source?.stitchesWide ?? '', rows: source?.rows ?? '', stitch: source?.stitch || '',
-        yarns: source ? JSON.parse(JSON.stringify(source.yarns || [])) : [], notes: '', photos: [], createdAt: now,
+        yarns: (source?.yarns || []).map((y) => ({
+          ...emptyYarn(), brand: y.brand, color: y.color, planned: num(y.used) ? y.used : y.planned,
+        })),
+        notes: '', photos: [], createdAt: now,
       };
-  if (!b.yarns.length) b.yarns.push({ brand: '', color: '', skeins: '' });
+  if (!b.yarns.length) b.yarns.push(emptyYarn());
+  // Each yarn row keeps its skein diary while the form is open, even if rows are added or removed.
+  b.yarns = b.yarns.map((y) => ({ ...y, key: uid() }));
+  const yarnLogs = new Map(b.yarns.map((y) => [y.key, y.log || []]));
 
   let photos = (b.photos || []).map((pid) => ({ id: pid }));
   unsavedChanges = false;
@@ -500,10 +718,20 @@ function renderForm(id, copyFromId) {
         <div class="chips wrap" role="radiogroup" aria-label="Size">
           ${SIZES.map((s) => `<label class="chip"><input type="radio" name="size" value="${s}"${b.size === s ? ' checked' : ''}><span>${s}</span></label>`).join('')}
         </div>
-        <div class="row">
-          <label class="field"><span>Width (${unit})</span>
+        <p class="pair-label">Planned size <em>(${unit})</em></p>
+        <div class="dims">
+          <label class="field"><span>Width</span>
+            <input name="plannedWidth" type="number" inputmode="decimal" step="any" min="0" value="${esc(b.plannedWidth)}"></label>
+          <span class="times">×</span>
+          <label class="field"><span>Length</span>
+            <input name="plannedLength" type="number" inputmode="decimal" step="any" min="0" value="${esc(b.plannedLength)}"></label>
+        </div>
+        <p class="pair-label">Finished size <em>(${unit}, measure when it's done)</em></p>
+        <div class="dims">
+          <label class="field"><span>Width</span>
             <input name="width" type="number" inputmode="decimal" step="any" min="0" value="${esc(b.width)}"></label>
-          <label class="field"><span>Length (${unit})</span>
+          <span class="times">×</span>
+          <label class="field"><span>Length</span>
             <input name="length" type="number" inputmode="decimal" step="any" min="0" value="${esc(b.length)}"></label>
         </div>
         <div class="row">
@@ -518,6 +746,7 @@ function renderForm(id, copyFromId) {
 
       <section class="group">
         <h3>Yarn</h3>
+        <p class="hint group-hint">Plan how many skeins of each colour you'll need. While you knit, the skein tracker counts what you actually use.</p>
         <div id="yarns"></div>
         <button type="button" class="btn ghost small" id="add-yarn">${icon.plus} Add another yarn</button>
       </section>
@@ -540,22 +769,29 @@ function renderForm(id, copyFromId) {
 
   function readYarns() {
     return [...yarnBox.querySelectorAll('.yarn')].map((row) => ({
+      key: row.dataset.key,
       brand: row.querySelector('[data-k="brand"]').value.trim(),
       color: row.querySelector('[data-k="color"]').value.trim(),
-      skeins: numberOrBlank(row.querySelector('[data-k="skeins"]').value),
+      planned: numberOrBlank(row.querySelector('[data-k="planned"]').value),
+      used: numberOrBlank(row.querySelector('[data-k="used"]').value),
+      log: yarnLogs.get(row.dataset.key) || [],
     }));
   }
 
   function drawYarns(yarns) {
     yarnBox.innerHTML = yarns.map((y, i) => `
-      <div class="yarn">
-        <label class="field"><span>Brand / line</span>
-          <input data-k="brand" list="brand-list" value="${esc(y.brand)}" placeholder="e.g. Bernat Blanket Big" autocomplete="off" autocapitalize="words"></label>
+      <div class="yarn" data-key="${y.key}">
         <div class="row">
           <label class="field"><span>Colour</span>
             <input data-k="color" list="color-list" value="${esc(y.color)}" placeholder="e.g. Sage" autocomplete="off" autocapitalize="words"></label>
-          <label class="field narrow"><span>Skeins</span>
-            <input data-k="skeins" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.skeins)}"></label>
+          <label class="field"><span>Brand / line</span>
+            <input data-k="brand" list="brand-list" value="${esc(y.brand)}" placeholder="e.g. Bernat" autocomplete="off" autocapitalize="words"></label>
+        </div>
+        <div class="row">
+          <label class="field"><span>Planned skeins</span>
+            <input data-k="planned" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.planned)}"></label>
+          <label class="field"><span>Used so far</span>
+            <input data-k="used" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.used)}"></label>
         </div>
         ${yarns.length > 1 ? `<button type="button" class="link danger-text" data-remove-yarn="${i}">Remove this yarn</button>` : ''}
       </div>`).join('');
@@ -626,7 +862,7 @@ function renderForm(id, copyFromId) {
 
   form.addEventListener('input', () => { unsavedChanges = true; });
   document.getElementById('add-yarn').addEventListener('click', () => {
-    drawYarns([...readYarns(), { brand: '', color: '', skeins: '' }]);
+    drawYarns([...readYarns(), { ...emptyYarn(), key: uid() }]);
     unsavedChanges = true;
     yarnBox.querySelector('.yarn:last-child input')?.focus();
   });
@@ -676,12 +912,16 @@ function renderForm(id, copyFromId) {
         started,
         finished,
         size: data.get('size') || '',
+        plannedWidth: numberOrBlank(data.get('plannedWidth')),
+        plannedLength: numberOrBlank(data.get('plannedLength')),
         width: numberOrBlank(data.get('width')),
         length: numberOrBlank(data.get('length')),
         stitchesWide: numberOrBlank(data.get('stitchesWide')),
         rows: numberOrBlank(data.get('rows')),
         stitch: (data.get('stitch') || '').trim(),
-        yarns: readYarns().filter((y) => y.brand || y.color || y.skeins !== ''),
+        yarns: readYarns()
+          .filter((y) => y.brand || y.color || has(y.planned) || has(y.used))
+          .map(({ key, ...y }) => y),
         notes: (data.get('notes') || '').trim(),
         photos: photos.map((p) => p.id),
         updatedAt: new Date().toISOString(),
@@ -894,6 +1134,7 @@ const routes = [
   [/^#\/b\/([\w-]+)$/, (m) => renderDetail(m[1])],
   [/^#\/edit\/([\w-]+)$/, (m) => renderForm(m[1])],
   [/^#\/again\/([\w-]+)$/, (m) => renderForm(null, m[1])],
+  [/^#\/finish\/([\w-]+)$/, (m) => renderFinish(m[1])],
   [/^#\/settings$/, () => renderSettings()],
 ];
 
@@ -923,7 +1164,22 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  // When a new version has downloaded, switch to it straight away (unless a form is half filled in).
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading || unsavedChanges) return;
+    reloading = true;
+    location.reload();
+  });
+  window.addEventListener('load', () =>
+    navigator.serviceWorker.register('sw.js')
+      .then((reg) => {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      })
+      .catch(() => {}));
 }
 
 load()
