@@ -6,7 +6,7 @@ import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 import { extractPdf, parsePattern, estimateSkeins } from './pattern-import.js';
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -1572,10 +1572,13 @@ function renderPatterns() {
 let pdfjsReady = null;
 function loadPdfjs() {
   if (!pdfjsReady) {
-    pdfjsReady = import('./vendor/pdfjs/pdf.min.mjs').then((pdfjs) => {
-      pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', location.href).href;
-      return pdfjs;
-    });
+    // The shim adds what Safari is missing, here and in the worker, before pdf.js loads.
+    pdfjsReady = import('./vendor/pdfjs/stream-iterator-shim.mjs')
+      .then(() => import('./vendor/pdfjs/pdf.min.mjs'))
+      .then((pdfjs) => {
+        pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.shim.mjs', location.href).href;
+        return pdfjs;
+      });
   }
   return pdfjsReady;
 }
@@ -1590,7 +1593,10 @@ async function importPatternPdf(file) {
   } catch (err) {
     console.error(err);
     pdfjsReady = null;
-    toast("That PDF couldn't be read. It may be damaged or password protected.");
+    const reason = /password/i.test(err?.name || '') || /password/i.test(err?.message || '')
+      ? 'It is password protected.'
+      : `It may be damaged. (${err?.message || err})`;
+    toast(`That PDF couldn't be read. ${reason}`);
     return;
   }
   const first = draft.sizes[0];

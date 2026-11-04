@@ -1,6 +1,6 @@
 // Keeps ImadeIt working with no internet. Bump VERSION whenever any app file changes
 // so installed copies pick up the new version the next time they open.
-const VERSION = 'imadeit-v1.7.0';
+const VERSION = 'imadeit-v1.7.1';
 const FILES = [
   './',
   './index.html',
@@ -15,6 +15,8 @@ const FILES = [
   './pattern-import.js',
   './vendor/pdfjs/pdf.min.mjs',
   './vendor/pdfjs/pdf.worker.min.mjs',
+  './vendor/pdfjs/pdf.worker.shim.mjs',
+  './vendor/pdfjs/stream-iterator-shim.mjs',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
