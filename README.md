@@ -12,6 +12,8 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 - **Pattern:** a pattern name, a link (Ravelry, a blog, YouTube…) and/or an attached pattern file (PDF, photo or document, up to 30 MB) that you can open or save from the blanket
 - **Yarn picker:** brand and colour fields suggest as you type, from 17 well-known chunky and chenille lines (Bernat, Lion Brand, Premier, Cozyful, HOMBYS, Loops & Threads, iDIY, Alize; about 850 colours). Anything else you type is remembered for next time. The list lives in `yarn-catalog.js`.
 - **Patterns:** save each pattern once (name, link, PDF, notes) and pick it when you start a blanket. Add many pattern files at once. Each pattern shows how often you've made it, average skeins and days.
+- **Pattern yarn and photos:** each pattern can have photos and a yarn recipe (colours, brands and skeins for one size). Blankets started from it get the yarn filled in, scaled to their size, and blankets without their own photo show the pattern's photo
+- **Skein guide:** your usual skeins per size (Settings). Patterns use it to show skeins for every size
 - **Free pattern:** The Rustic Blanket, a Breadcrumb pattern by Rustic Nastalje, built in. Pick a size and it sets up the blanket; the row counter shows each row's instruction.
 - **Row counter:** for any blanket with a row count, tap once per row, with undo
 - **Spreadsheets:** import blankets from Google Sheets, Excel or Numbers (CSV, one row per yarn colour), download a blank template, or export everything as a spreadsheet

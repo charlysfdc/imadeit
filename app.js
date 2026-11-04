@@ -5,7 +5,7 @@ import { YARN_LINES } from './yarn-catalog.js';
 import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -448,7 +448,9 @@ function renderResults() {
 }
 
 function card(b) {
-  const cover = b.photos && b.photos[0];
+  const ownCover = b.photos && b.photos[0];
+  const patternCover = !ownCover && patternById(b.patternId)?.photos?.[0];
+  const cover = ownCover || patternCover;
   const detail = [b.patternName, b.size].filter(Boolean).join(' · ');
   const planned = plannedOf(b);
   const when = b.finished
@@ -460,6 +462,7 @@ function card(b) {
       <div class="thumb">
         ${cover ? `<img data-photo="${cover}" alt="">` : '<div class="knit"></div>'}
         <span class="num">#${esc(b.number)}</span>
+        ${patternCover ? '<span class="from-pattern">Pattern photo</span>' : ''}
         ${b.finished ? '' : '<span class="badge">In progress</span>'}
       </div>
       <div class="card-body">
@@ -480,7 +483,7 @@ const YARN_COLORS = {
   denim: '#5b7896', charcoal: '#3f3f45', espresso: '#4a3426', camel: '#c19a6b', blue: '#6f8fb5', lilac: '#c3b1d6',
   lavender: '#b9a7d6', mint: '#bfe0cc', khaki: '#b9a77f', teal: '#3f8f8b', navy: '#2f3d5c',
   green: '#6f9a5e', red: '#b3443a', pink: '#eaa9b6', purple: '#8a6aa8', yellow: '#e8c95a', orange: '#e08a3c',
-  brown: '#7a5a43', tan: '#c8a97e', ivory: '#f6f0dc', white: '#f7f4ee', black: '#2b2b2b', grey: '#9a9a9a', gray: '#9a9a9a',
+  brown: '#7a5a43', tan: '#c8a97e', beige: '#d9c7a5', maroon: '#6e1f2b', wine: '#6e1f2b', ivory: '#f6f0dc', white: '#f7f4ee', black: '#2b2b2b', grey: '#9a9a9a', gray: '#9a9a9a',
 };
 
 function swatchColor(name) {
@@ -668,6 +671,9 @@ function renderDetail(id) {
       <span class="bar-title">#${esc(b.number)}</span>
       <a class="text-btn" href="#/edit/${b.id}">Edit</a>
     </header>
+    ${!(b.photos && b.photos.length) && pattern?.photos?.length ? `<div class="gallery single">
+      <button class="shot" data-open="${pattern.photos[0]}" aria-label="View the pattern photo larger"><img data-photo="${pattern.photos[0]}" data-kind="full" alt="Photo of the ${esc(pattern.name)} pattern"><span class="from-pattern">Pattern photo</span></button>
+    </div>` : ''}
     ${b.photos && b.photos.length ? `<div class="gallery${b.photos.length === 1 ? ' single' : ''}">
       ${b.photos.map((p, i) => `<button class="shot" data-open="${p}" aria-label="View photo ${i + 1} larger"><img data-photo="${p}" data-kind="full" alt="Photo ${i + 1} of ${esc(nameOf(b))}"></button>`).join('')}
     </div>` : ''}
@@ -876,6 +882,83 @@ function renderMissing() {
     <section class="empty"><h2>That blanket isn't here</h2><p>It may have been deleted.</p><a class="btn primary" href="#/">Back to my blankets</a></section>`;
 }
 
+// ---------- Photo picker (blankets and patterns) ----------
+
+// `list` holds { id } for saved photos and { id, full, thumb, url } for ones picked in this form.
+function mountPhotoStrip(strip, hint, list) {
+  const draw = () => {
+    strip.innerHTML = `
+      ${list.map((p, i) => `
+        <div class="pic${i === 0 ? ' cover' : ''}">
+          <button type="button" class="pic-img" data-cover="${i}" aria-label="${i === 0 ? 'Cover photo' : 'Make this the cover photo'}">
+            <img ${p.url ? `src="${p.url}"` : `data-photo="${p.id}"`} alt="">
+            ${i === 0 ? '<span>Cover</span>' : ''}
+          </button>
+          <button type="button" class="pic-remove" data-remove-photo="${i}" aria-label="Remove photo">${icon.close}</button>
+        </div>`).join('')}
+      <label class="add-photo">
+        <input type="file" accept="image/*" multiple class="photo-input">
+        ${icon.camera}<span>${list.length ? 'Add more' : 'Add photos'}</span>
+      </label>`;
+    if (hint) hint.textContent = list.length > 1 ? 'Tap a photo to make it the cover.' : '';
+    hydratePhotos(strip);
+
+    strip.querySelectorAll('[data-cover]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.cover);
+        if (i === 0) return;
+        list.unshift(...list.splice(i, 1));
+        unsavedChanges = true;
+        draw();
+      }));
+    strip.querySelectorAll('[data-remove-photo]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const [removed] = list.splice(Number(btn.dataset.removePhoto), 1);
+        if (removed.url) URL.revokeObjectURL(removed.url);
+        unsavedChanges = true;
+        draw();
+      }));
+    const input = strip.querySelector('.photo-input');
+    input.addEventListener('change', async () => {
+      const files = [...input.files];
+      input.value = '';
+      if (!files.length) return;
+      strip.classList.add('busy');
+      for (const file of files) {
+        try {
+          const { full, thumb } = await preparePhoto(file);
+          list.push({ id: uid(), full, thumb, url: URL.createObjectURL(thumb) });
+        } catch (err) {
+          toast(err.message);
+        }
+      }
+      strip.classList.remove('busy');
+      unsavedChanges = true;
+      draw();
+    });
+  };
+  draw();
+}
+
+// Stores newly picked photos and deletes ones removed from the list. Returns the ids in order.
+async function savePhotoList(list, previousIds = []) {
+  for (const p of list) {
+    if (p.full) await db.put('photos', { id: p.id, full: p.full, thumb: p.thumb });
+  }
+  const kept = new Set(list.map((p) => p.id));
+  for (const old of previousIds || []) {
+    if (!kept.has(old)) {
+      await db.remove('photos', old);
+      forgetPhoto(old);
+    }
+  }
+  return list.map((p) => p.id);
+}
+
+function releasePhotoList(list) {
+  for (const p of list) if (p.url) URL.revokeObjectURL(p.url);
+}
+
 // ---------- Yarn suggestions ----------
 
 // Brands and colours already used in this notebook, so anything typed once is offered again.
@@ -981,6 +1064,10 @@ function renderForm(id, copyFromId, preset = null) {
     const p = patternById(preset.patternId);
     Object.assign(b, preset, { patternName: p ? p.name : '' });
     if (!b.title && p) b.title = preset.patternSize ? `${p.name} (${preset.patternSize})` : p.name;
+    if (p?.yarns?.length) {
+      if (!has(b.plannedWidth) && has(p.recipeWidth)) Object.assign(b, { plannedWidth: p.recipeWidth, plannedLength: p.recipeLength });
+      b.yarns = recipeYarns(p, b.plannedWidth, b.plannedLength);
+    }
   }
   if (!b.yarns.length) b.yarns.push(emptyYarn());
   // Each yarn row keeps its skein diary while the form is open, even if rows are added or removed.
@@ -1126,59 +1213,6 @@ function renderForm(id, copyFromId, preset = null) {
       }));
   }
 
-  async function drawPhotos() {
-    strip.innerHTML = `
-      ${photos.map((p, i) => `
-        <div class="pic${i === 0 ? ' cover' : ''}">
-          <button type="button" class="pic-img" data-cover="${i}" aria-label="${i === 0 ? 'Cover photo' : 'Make this the cover photo'}">
-            <img ${p.url ? `src="${p.url}"` : `data-photo="${p.id}"`} alt="">
-            ${i === 0 ? '<span>Cover</span>' : ''}
-          </button>
-          <button type="button" class="pic-remove" data-remove-photo="${i}" aria-label="Remove photo">${icon.close}</button>
-        </div>`).join('')}
-      <label class="add-photo">
-        <input type="file" accept="image/*" multiple id="photo-input">
-        ${icon.camera}<span>${photos.length ? 'Add more' : 'Add photos'}</span>
-      </label>`;
-    document.getElementById('photo-hint').textContent = photos.length > 1 ? 'Tap a photo to make it the cover.' : '';
-    hydratePhotos(strip);
-
-    strip.querySelectorAll('[data-cover]').forEach((btn) =>
-      btn.addEventListener('click', () => {
-        const i = Number(btn.dataset.cover);
-        if (i === 0) return;
-        photos.unshift(...photos.splice(i, 1));
-        unsavedChanges = true;
-        drawPhotos();
-      }));
-    strip.querySelectorAll('[data-remove-photo]').forEach((btn) =>
-      btn.addEventListener('click', () => {
-        const [removed] = photos.splice(Number(btn.dataset.removePhoto), 1);
-        if (removed.url) URL.revokeObjectURL(removed.url);
-        unsavedChanges = true;
-        drawPhotos();
-      }));
-
-    const input = document.getElementById('photo-input');
-    input.addEventListener('change', async () => {
-      const files = [...input.files];
-      input.value = '';
-      if (!files.length) return;
-      strip.classList.add('busy');
-      for (const file of files) {
-        try {
-          const { full, thumb } = await preparePhoto(file);
-          photos.push({ id: uid(), full, thumb, url: URL.createObjectURL(thumb) });
-        } catch (err) {
-          toast(err.message);
-        }
-      }
-      strip.classList.remove('busy');
-      unsavedChanges = true;
-      drawPhotos();
-    });
-  }
-
   const patternInput = document.getElementById('pattern-name');
   const extraBox = document.getElementById('pattern-extra');
   let extraFor = null;
@@ -1198,7 +1232,17 @@ function renderForm(id, copyFromId, preset = null) {
         ? [`Free pattern by ${built.designer}`, match.id === b.patternId && b.patternSize ? b.patternSize : '']
         : [match.url ? 'link' : '', match.file ? 'file' : '', plural(blanketsWithPattern(match.id).length, 'blanket')];
       extraBox.innerHTML = `<div class="file-chip">${icon.book}
-          <span><strong>From ${built ? 'Rustic Nastalje' : 'your patterns'}</strong><small>${esc(bits.filter(Boolean).join(' · '))}</small></span></div>`;
+          <span><strong>From ${built ? 'Rustic Nastalje' : 'your patterns'}</strong><small>${esc(bits.filter(Boolean).join(' · '))}</small></span></div>
+        ${match.yarns?.length ? `<button type="button" class="btn ghost small" id="use-recipe">${icon.plus} Use this pattern's yarn (${plural(match.yarns.length, 'colour')})</button>` : ''}`;
+      document.getElementById('use-recipe')?.addEventListener('click', () => {
+        const pw = form.querySelector('[name=plannedWidth]');
+        const pl = form.querySelector('[name=plannedLength]');
+        if (!pw.value && has(match.recipeWidth)) { pw.value = match.recipeWidth; pl.value = match.recipeLength; }
+        const kept = readYarns().filter((y) => y.brand || y.color || has(y.planned) || has(y.used));
+        drawYarns([...kept, ...recipeYarns(match, pw.value, pl.value).map((y) => ({ ...y, key: uid() }))]);
+        unsavedChanges = true;
+        toast('Yarn filled in from the pattern');
+      });
     } else {
       extraBox.innerHTML = `
         <p class="hint group-hint">New pattern. It's saved to your patterns so you can pick it next time.</p>
@@ -1238,7 +1282,7 @@ function renderForm(id, copyFromId, preset = null) {
   patternInput.addEventListener('blur', () => setTimeout(drawPatternExtra, 0));
 
   drawYarns(b.yarns);
-  drawPhotos();
+  mountPhotoStrip(strip, document.getElementById('photo-hint'), photos);
   drawPatternExtra();
 
   form.addEventListener('input', () => { unsavedChanges = true; });
@@ -1249,7 +1293,7 @@ function renderForm(id, copyFromId, preset = null) {
   });
 
   const leave = () => {
-    for (const p of photos) if (p.url) URL.revokeObjectURL(p.url);
+    releasePhotoList(photos);
     unsavedChanges = false;
     location.hash = existing ? `#/b/${existing.id}` : source ? `#/b/${source.id}` : '#/';
   };
@@ -1283,16 +1327,7 @@ function renderForm(id, copyFromId, preset = null) {
     saving = true;
     document.getElementById('save').disabled = true;
     try {
-      for (const p of photos) {
-        if (p.full) await db.put('photos', { id: p.id, full: p.full, thumb: p.thumb });
-      }
-      const kept = new Set(photos.map((p) => p.id));
-      for (const old of existing?.photos || []) {
-        if (!kept.has(old)) {
-          await db.remove('photos', old);
-          forgetPhoto(old);
-        }
-      }
+      await savePhotoList(photos, existing?.photos);
       if (!pattern && patternName) {
         const now = new Date().toISOString();
         pattern = { id: uid(), name: patternName, url: patternUrl, file: await storePatternFile(patternFile), notes: '', createdAt: now, updatedAt: now };
@@ -1323,7 +1358,7 @@ function renderForm(id, copyFromId, preset = null) {
         updatedAt: new Date().toISOString(),
       };
       await saveBlanket(saved);
-      for (const p of photos) if (p.url) URL.revokeObjectURL(p.url);
+      releasePhotoList(photos);
       unsavedChanges = false;
       toast(existing ? 'Changes saved' : 'Blanket saved');
       location.hash = `#/b/${saved.id}`;
@@ -1408,7 +1443,7 @@ function renderPatterns() {
       ${mine.length ? `<ul class="pattern-list">${mine.map((p) => {
         const made = blanketsWithPattern(p.id).length;
         const bits = [made ? `Made ${made}×` : 'Not made yet', p.file ? 'File' : '', p.url ? hostOf(p.url) : ''].filter(Boolean);
-        return `<li><a href="#/p/${p.id}">${icon.book}<span><strong>${esc(p.name)}</strong><small>${esc(bits.join(' · '))}</small></span>${icon.next}</a></li>`;
+        return `<li><a href="#/p/${p.id}">${patternThumb(p)}<span><strong>${esc(p.name)}</strong><small>${esc(bits.join(' · '))}</small></span>${icon.next}</a></li>`;
       }).join('')}</ul>`
       : `<p class="fine">Save each pattern once: its name, a link, or the PDF. Then pick it whenever you start a blanket.</p>`}
       <div class="library-actions">
@@ -1420,6 +1455,7 @@ function renderPatterns() {
     </section>
     <p class="shop-line"><a href="${SHOP_URL}" target="_blank" rel="noopener">More Breadcrumb patterns by Rustic Nastalje on Etsy ${icon.external}</a></p>`;
 
+  hydratePhotos();
   const bulk = document.getElementById('bulk-files');
   bulk.addEventListener('change', async () => {
     const files = [...bulk.files];
@@ -1447,6 +1483,56 @@ function renderPatterns() {
   });
 }
 
+// ---------- Skein guide and yarn recipes ----------
+
+// The maker's own "how many skeins for this size" table, from Settings.
+const skeinGuide = () => (state.settings.skeinGuide || []).filter((g) => num(g.width) && num(g.length) && num(g.skeins));
+
+// Skeins for a size: the guide's own row when it has one, otherwise estimated from the nearest rows by area.
+function guideSkeins(width, length) {
+  const w = num(width), l = num(length);
+  const guide = skeinGuide();
+  if (!w || !l || !guide.length) return null;
+  const exact = guide.find((g) => (num(g.width) === w && num(g.length) === l) || (num(g.width) === l && num(g.length) === w));
+  if (exact) return num(exact.skeins);
+  const pts = guide.map((g) => [num(g.width) * num(g.length), num(g.skeins)]).sort((a, b) => a[0] - b[0]);
+  const area = w * l;
+  if (pts.length === 1) return pts[0][1] * (area / pts[0][0]);
+  let [lo, hi] = [pts[0], pts[1]];
+  for (let i = 1; i < pts.length; i++) {
+    [lo, hi] = [pts[i - 1], pts[i]];
+    if (area <= pts[i][0]) break;
+  }
+  return Math.max(0.5, lo[1] + ((hi[1] - lo[1]) * (area - lo[0])) / (hi[0] - lo[0]));
+}
+
+// A pattern's yarn for a blanket of the given size, scaled from the size the recipe was written for.
+function recipeYarns(pattern, width, length) {
+  const list = (pattern?.yarns || []).filter((y) => y.brand || y.color);
+  const rw = num(pattern?.recipeWidth), rl = num(pattern?.recipeLength);
+  let ratio = 1;
+  if (rw && rl && num(width) && num(length) && !(rw === num(width) && rl === num(length))) {
+    const target = guideSkeins(width, length), base = guideSkeins(rw, rl);
+    ratio = target && base ? target / base : (num(width) * num(length)) / (rw * rl);
+  }
+  // Work in half skeins and hand out the rounding so the colours add up to the size's total.
+  const raw = list.map((y) => (has(y.skeins) ? num(y.skeins) * ratio * 2 : null));
+  const target = Math.round(raw.reduce((n, v) => n + (v || 0), 0));
+  const halves = raw.map((v) => (v == null ? null : Math.max(1, Math.floor(v))));
+  let left = target - halves.reduce((n, v) => n + (v || 0), 0);
+  const order = raw.map((v, i) => [v == null ? -1 : v - Math.floor(v), i]).sort((a, b) => b[0] - a[0]);
+  for (const [frac, i] of order) {
+    if (left <= 0 || frac < 0) break;
+    halves[i] += 1;
+    left -= 1;
+  }
+  return list.map((y, i) => ({ ...emptyYarn(), brand: y.brand || '', color: y.color || '', planned: halves[i] == null ? '' : halves[i] / 2 }));
+}
+
+function patternThumb(p) {
+  return p.photos && p.photos[0] ? `<span class="pthumb"><img data-photo="${p.photos[0]}" alt=""></span>` : icon.book;
+}
+
 function renderPatternDetail(id) {
   const p = libraryPattern(id);
   if (!p) return renderMissing();
@@ -1456,6 +1542,10 @@ function renderPatternDetail(id) {
   const avgSkeins = avg(done.map(usedOf).filter((n) => n > 0));
   const avgDays = avg(done.map(daysTaken).filter(Boolean));
   const sizes = done.map((b) => dimsText(b.width, b.length)).filter(Boolean);
+  const recipe = (p.yarns || []).filter((y) => y.brand || y.color);
+  const recipeTotal = recipe.reduce((n, y) => n + num(y.skeins), 0);
+  const unit = unitLabel();
+  const bySize = recipe.length && has(p.recipeWidth) && has(p.recipeLength) ? skeinGuide() : [];
 
   app.innerHTML = `
     <header class="bar">
@@ -1463,10 +1553,27 @@ function renderPatternDetail(id) {
       <span class="bar-title">Pattern</span>
       <a class="text-btn" href="#/pedit/${p.id}">Edit</a>
     </header>
+    ${p.photos && p.photos.length ? `<div class="gallery${p.photos.length === 1 ? ' single' : ''}">
+      ${p.photos.map((ph, i) => `<button class="shot" data-open="${ph}" aria-label="View photo ${i + 1} larger"><img data-photo="${ph}" data-kind="full" alt="Photo ${i + 1} of ${esc(p.name)}"></button>`).join('')}
+    </div>` : ''}
     <article class="detail">
       <p class="eyebrow">My pattern</p>
       <h2>${esc(p.name)}</h2>
       ${p.url || p.file ? `<div class="pattern">${patternLinkRow(p)}${patternFileRow(p)}</div>` : ''}
+      ${recipe.length ? `
+        <h3>Yarn <span>${recipeTotal ? `${plural(round(recipeTotal), 'skein')}` : ''}${has(p.recipeWidth) ? ` for ${esc(dimsText(p.recipeWidth, p.recipeLength))}` : ''}</span></h3>
+        <ul class="yarns">${recipe.map((y) => `<li>${swatch(y)}${yarnName(y)}
+          <div class="yarn-used">${has(y.skeins) ? `<b>${plural(round(y.skeins), 'skein')}</b>` : ''}</div></li>`).join('')}</ul>
+        ${bySize.length ? `
+          <div class="size-table-wrap"><table class="size-table">
+            <thead><tr><th>Size</th>${recipe.map((y) => `<th>${swatch(y)}<span>${esc(y.color || y.brand)}</span></th>`).join('')}<th>Total</th></tr></thead>
+            <tbody>${bySize.map((g) => {
+              const ys = recipeYarns(p, g.width, g.length);
+              return `<tr><td>${esc(g.name || '')}<small>${esc(g.width)} × ${esc(g.length)} ${unit}</small></td>${ys.map((y) => `<td>${y.planned}</td>`).join('')}<td><b>${round(ys.reduce((n, y) => n + num(y.planned), 0))}</b></td></tr>`;
+            }).join('')}</tbody>
+          </table></div>
+          <p class="fine">Skeins per size follow your skein guide in Settings.</p>` : ''}` : `
+        <p class="fine">Add the yarn colours to this pattern (Edit) and every blanket you start from it gets them filled in, scaled to its size.</p>`}
       ${done.length ? `<dl class="facts">
         <div><dt>Made</dt><dd>${plural(made.length, 'time')}</dd></div>
         <div><dt>Skeins, on average</dt><dd>${avgSkeins ?? '–'}</dd></div>
@@ -1479,11 +1586,16 @@ function renderPatternDetail(id) {
       <div class="actions"><button class="btn danger block" id="delete-pattern">Delete this pattern</button></div>
     </article>`;
   hydratePhotos();
+  app.querySelectorAll('[data-open]').forEach((btn) => btn.addEventListener('click', () => openPhoto(btn.dataset.open)));
   if (p.file) preparePatternFile(p.file);
   document.getElementById('delete-pattern').addEventListener('click', async () => {
     const note = made.length ? ` ${plural(made.length, 'blanket')} made with it will keep the pattern's name.` : '';
     if (!confirm(`Delete the pattern “${p.name}”?${note}`)) return;
     if (p.file) await db.remove('files', p.file.id);
+    for (const ph of p.photos || []) {
+      await db.remove('photos', ph);
+      forgetPhoto(ph);
+    }
     for (const b of made) await saveBlanket({ ...b, patternId: '' }, { quiet: true });
     await db.remove('patterns', p.id);
     state.patterns = state.patterns.filter((x) => x.id !== p.id);
@@ -1497,7 +1609,11 @@ function renderPatternForm(id) {
   const existing = id ? libraryPattern(id) : null;
   if (id && !existing) return renderMissing();
   let file = existing?.file ? { ...existing.file } : null;
+  const photos = (existing?.photos || []).map((pid) => ({ id: pid }));
+  let recipe = (existing?.yarns || []).map((y) => ({ ...y }));
+  if (!recipe.length) recipe.push({ brand: '', color: '', skeins: '' });
   unsavedChanges = false;
+  const unit = unitLabel();
 
   app.innerHTML = `
     <header class="bar">
@@ -1507,11 +1623,29 @@ function renderPatternForm(id) {
     </header>
     <form id="pattern-form" class="form" novalidate>
       <section class="group">
+        <div class="photo-strip" id="pattern-photos"></div>
+        <p class="hint" id="pattern-photo-hint"></p>
+      </section>
+      <section class="group">
         <label class="field"><span>Pattern name</span>
           <input name="name" value="${esc(existing?.name || '')}" placeholder="e.g. Lodge Plaid" autocomplete="off" autocapitalize="words" required></label>
         <label class="field"><span>Link <em>optional</em></span>
           <input name="url" type="url" inputmode="url" value="${esc(existing?.url || '')}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
         <div id="file-box"></div>
+      </section>
+      <section class="group">
+        <h3>Yarn</h3>
+        <p class="hint group-hint">The colours this pattern uses, and how many skeins of each for one size. Blankets started from it get these filled in, scaled to their size.</p>
+        <p class="pair-label">Skeins below are for <em>(${unit})</em></p>
+        <div class="dims">
+          <label class="field"><span>Width</span>
+            <input name="recipeWidth" type="number" inputmode="decimal" step="any" min="0" value="${esc(existing?.recipeWidth ?? '')}"></label>
+          <span class="times">×</span>
+          <label class="field"><span>Length</span>
+            <input name="recipeLength" type="number" inputmode="decimal" step="any" min="0" value="${esc(existing?.recipeLength ?? '')}"></label>
+        </div>
+        <div id="recipe"></div>
+        <button type="button" class="btn ghost small" id="add-recipe-yarn">${icon.plus} Add a colour</button>
       </section>
       <section class="group">
         <h3>Notes</h3>
@@ -1521,6 +1655,48 @@ function renderPatternForm(id) {
     </form>`;
 
   const form = document.getElementById('pattern-form');
+  mountPhotoStrip(document.getElementById('pattern-photos'), document.getElementById('pattern-photo-hint'), photos);
+
+  const recipeBox = document.getElementById('recipe');
+  const readRecipe = () => [...recipeBox.querySelectorAll('.yarn')].map((row) => ({
+    brand: row.querySelector('[data-k="brand"]').value.trim(),
+    color: row.querySelector('[data-k="color"]').value.trim(),
+    skeins: numberOrBlank(row.querySelector('[data-k="skeins"]').value),
+  }));
+  const drawRecipe = () => {
+    recipeBox.innerHTML = recipe.map((y, i) => `
+      <div class="yarn">
+        <div class="field"><label for="rb-${i}">Brand / line</label>
+          <div class="ac"><input id="rb-${i}" data-k="brand" value="${esc(y.brand)}" placeholder="Start typing, e.g. HOMBYS" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false"></div></div>
+        <div class="row">
+          <div class="field"><label for="rc-${i}">Colour</label>
+            <div class="ac"><input id="rc-${i}" data-k="color" value="${esc(y.color)}" placeholder="Pick or type" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false"></div></div>
+          <label class="field narrow"><span>Skeins</span>
+            <input data-k="skeins" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.skeins)}"></label>
+        </div>
+        ${recipe.length > 1 ? `<button type="button" class="link danger-text" data-remove="${i}">Remove this colour</button>` : ''}
+      </div>`).join('');
+    recipeBox.querySelectorAll('.yarn').forEach((row) => {
+      const brand = row.querySelector('[data-k="brand"]');
+      const color = row.querySelector('[data-k="color"]');
+      attachAutocomplete(brand, { getOptions: brandOptions, onPick: () => color.focus() });
+      attachAutocomplete(color, { getOptions: (q) => colorOptions(brand.value, q), renderSwatch: swatchElement, onPick: () => row.querySelector('[data-k="skeins"]').focus() });
+    });
+    recipeBox.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', () => {
+      recipe = readRecipe();
+      recipe.splice(Number(btn.dataset.remove), 1);
+      unsavedChanges = true;
+      drawRecipe();
+    }));
+  };
+  drawRecipe();
+  document.getElementById('add-recipe-yarn').addEventListener('click', () => {
+    recipe = [...readRecipe(), { brand: '', color: '', skeins: '' }];
+    unsavedChanges = true;
+    drawRecipe();
+    recipeBox.querySelector('.yarn:last-child input')?.focus();
+  });
+
   const box = document.getElementById('file-box');
   const drawFile = () => {
     box.innerHTML = file
@@ -1545,6 +1721,7 @@ function renderPatternForm(id) {
   form.addEventListener('input', () => { unsavedChanges = true; });
   document.getElementById('cancel').addEventListener('click', () => {
     if (unsavedChanges && !confirm('Leave without saving your changes?')) return;
+    releasePhotoList(photos);
     unsavedChanges = false;
     location.hash = existing ? `#/p/${existing.id}` : '#/patterns';
   });
@@ -1568,8 +1745,23 @@ function renderPatternForm(id) {
     }
     const fileMeta = file?.blob ? await storePatternFile(file) : file;
     if (existing?.file && existing.file.id !== fileMeta?.id) await db.remove('files', existing.file.id);
+    const photoIds = await savePhotoList(photos, existing?.photos);
+    releasePhotoList(photos);
     const now = new Date().toISOString();
-    const saved = { id: existing?.id || uid(), createdAt: existing?.createdAt || now, name, url, file: fileMeta, notes: (data.get('notes') || '').trim(), updatedAt: now };
+    const saved = {
+      ...(existing || {}),
+      id: existing?.id || uid(),
+      createdAt: existing?.createdAt || now,
+      name,
+      url,
+      file: fileMeta,
+      photos: photoIds,
+      yarns: readRecipe().filter((y) => y.brand || y.color || has(y.skeins)),
+      recipeWidth: numberOrBlank(data.get('recipeWidth')),
+      recipeLength: numberOrBlank(data.get('recipeLength')),
+      notes: (data.get('notes') || '').trim(),
+      updatedAt: now,
+    };
     await savePattern(saved);
     await noteChange();
     requestPersistence();
@@ -1793,6 +1985,50 @@ async function importSpreadsheet(file) {
 
 // ---------- Settings & backups ----------
 
+// Edits the skein guide in place; each change is saved straight away.
+function mountSkeinGuide(box, addButton) {
+  const unit = unitLabel();
+  const save = async () => {
+    state.settings.skeinGuide = [...box.querySelectorAll('.guide-row')].map((row) => ({
+      name: row.querySelector('[data-g="name"]').value.trim(),
+      width: numberOrBlank(row.querySelector('[data-g="width"]').value),
+      length: numberOrBlank(row.querySelector('[data-g="length"]').value),
+      skeins: numberOrBlank(row.querySelector('[data-g="skeins"]').value),
+    })).filter((g) => g.name || has(g.width) || has(g.length) || has(g.skeins));
+    await db.setMeta('settings', state.settings);
+  };
+  const draw = (rows) => {
+    box.innerHTML = rows.length ? `
+      <div class="guide-head"><span>Size</span><span>W × L (${unit})</span><span>Skeins</span></div>
+      ${rows.map((g, i) => `
+        <div class="guide-row">
+          <input data-g="name" value="${esc(g.name)}" placeholder="e.g. Throw" aria-label="Size name" autocapitalize="words">
+          <span class="guide-dims">
+            <input data-g="width" type="number" inputmode="decimal" step="any" min="0" value="${esc(g.width)}" aria-label="Width">
+            <span>×</span>
+            <input data-g="length" type="number" inputmode="decimal" step="any" min="0" value="${esc(g.length)}" aria-label="Length">
+          </span>
+          <input data-g="skeins" type="number" inputmode="decimal" step="any" min="0" value="${esc(g.skeins)}" aria-label="Skeins">
+          <button type="button" class="pic-remove guide-remove" data-remove="${i}" aria-label="Remove this size">${icon.close}</button>
+        </div>`).join('')}` : '<p class="fine">No sizes yet.</p>';
+    box.querySelectorAll('input').forEach((input) => input.addEventListener('change', save));
+    box.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', async () => {
+      const list = [...(state.settings.skeinGuide || [])];
+      list.splice(Number(btn.dataset.remove), 1);
+      state.settings.skeinGuide = list;
+      await db.setMeta('settings', state.settings);
+      draw(list);
+    }));
+  };
+  addButton.addEventListener('click', () => {
+    const rows = [...(state.settings.skeinGuide || []), { name: '', width: '', length: '', skeins: '' }];
+    state.settings.skeinGuide = rows;
+    draw(rows);
+    box.querySelector('.guide-row:last-child input')?.focus();
+  });
+  draw(state.settings.skeinGuide || []);
+}
+
 function renderSettings() {
   const last = state.lastBackup
     ? (() => {
@@ -1828,6 +2064,13 @@ function renderSettings() {
         <button class="btn ghost block" id="csv-template">Get a blank template</button>
         <button class="btn ghost block" id="export-csv"${state.blankets.length ? '' : ' disabled'}>Download my blankets as a spreadsheet</button>
         <p class="fine">Spreadsheets hold the words and numbers only. Use “Save a backup” to keep photos and pattern files too.</p>
+      </section>
+
+      <section class="panel">
+        <h3>Skein guide</h3>
+        <p class="fine">How many skeins you usually use for each size. Patterns use it to work out their yarn for every size.</p>
+        <div id="guide"></div>
+        <button class="btn ghost small" id="add-guide">${icon.plus} Add a size</button>
       </section>
 
       <section class="panel">
@@ -1871,6 +2114,7 @@ function renderSettings() {
     </div>`;
 
   document.getElementById('export').addEventListener('click', exportBackup);
+  mountSkeinGuide(document.getElementById('guide'), document.getElementById('add-guide'));
   document.getElementById('export-csv').addEventListener('click', exportSpreadsheet);
   document.getElementById('csv-template').addEventListener('click', downloadTemplate);
   const csvInput = document.getElementById('import-csv');
@@ -1972,6 +2216,10 @@ async function importBackup(file) {
       forgetPhoto(p.id);
     }
     for (const pattern of data.patterns || []) await db.put('patterns', pattern);
+    if (data.settings?.skeinGuide?.length && !skeinGuide().length) {
+      state.settings.skeinGuide = data.settings.skeinGuide;
+      await db.setMeta('settings', state.settings);
+    }
     for (const f of data.files || []) {
       await db.put('files', { id: f.id, blob: await dataURLToBlob(f.data) });
     }
