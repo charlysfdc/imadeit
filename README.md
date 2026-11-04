@@ -14,6 +14,8 @@ A cozy little app for chunky blanket knitters to keep track of every blanket the
 - **Patterns:** save each pattern once (name, link, PDF, notes) and pick it when you start a blanket. Add many pattern files at once. Each pattern shows how often you've made it, average skeins and days.
 - **Pattern yarn and photos:** each pattern can have photos and a yarn recipe (colours, brands and skeins for one size). Blankets started from it get the yarn filled in, scaled to their size, and blankets without their own photo show the pattern's photo
 - **Yarn cost and supplier:** cost per skein and where you bought it, per yarn. Blankets show their yarn cost, patterns show average yarn cost and the cost for every size, and the cost and supplier you used last are filled in for you next time
+- **Import a pattern from a PDF:** reads the PDF on the phone (nothing is uploaded) and fills in the name, sizes with loops and rows, yarn colours and skeins, and the instruction for every row. You check it before saving. Picture-only PDFs are attached with just the name. Built around the Breadcrumb pattern layout; other designers' PDFs get whatever matches
+- **Pattern sizes:** patterns can list sizes with loops and rows; starting a blanket in a size sets them up, and the row counter shows each row's instruction
 - **Skein guide:** your usual skeins per size (Settings). Patterns use it to show skeins for every size
 - **Free pattern:** The Rustic Blanket, a Breadcrumb pattern by Rustic Nastalje, built in. Pick a size and it sets up the blanket; the row counter shows each row's instruction.
 - **Row counter:** for any blanket with a row count, tap once per row, with undo
@@ -77,6 +79,8 @@ the domain once and keep it.
 | `yarn-catalog.js` | Built-in yarn brands and their colours |
 | `rustic-patterns.js` | The free built-in pattern (The Rustic Blanket) |
 | `csv.js` | Reading and writing spreadsheets (CSV) |
+| `pattern-import.js` | Reads pattern PDFs into name, sizes, yarn and rows |
+| `vendor/pdfjs/` | pdf.js 6.4.299 (Apache 2.0), used to read PDFs on the device |
 | `styles.css` | The cozy rustic look, light and dark |
 | `sw.js` | Offline support |
 | `manifest.webmanifest`, `icons/` | What makes it installable as an app |

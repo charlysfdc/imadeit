@@ -892,3 +892,27 @@ textarea { resize: vertical; line-height: 1.5; }
 .size-table th, .size-table td { padding: 9px 4px; }
 .size-table th { max-width: 62px; }
 .size-table td:first-child { white-space: normal; min-width: 92px; }
+
+/* Pattern sizes editor and imported rows */
+.size-row { padding: 10px 0; border-bottom: 1px dashed var(--line); display: grid; gap: 8px; }
+.size-row:last-child { border-bottom: 0; }
+.size-row > input, .size-nums input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px var(--sans);
+}
+.size-nums { display: grid; grid-template-columns: repeat(4, 1fr) 28px; gap: 6px; align-items: end; }
+.size-nums label { display: grid; gap: 3px; min-width: 0; }
+.size-nums label span { font-size: 0.72rem; font-weight: 600; color: var(--muted); }
+.size-nums input { padding: 8px 4px; text-align: center; }
+#add-size { margin-top: 6px; }
+#row-steps .file-chip { margin-top: 12px; }
+.rows-list.compact { padding: 0 12px 12px; gap: 6px; }
+.rows-list.compact li { box-shadow: none; background: var(--bg); font-size: 0.9rem; }
+.pattern-step summary .fine { font-family: var(--sans); font-weight: 500; margin-left: 6px; }

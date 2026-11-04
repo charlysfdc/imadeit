@@ -4,8 +4,9 @@ import { attachAutocomplete, matchScore } from './autocomplete.js';
 import { YARN_LINES } from './yarn-catalog.js';
 import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
+import { extractPdf, parsePattern, estimateSkeins } from './pattern-import.js';
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -25,6 +26,7 @@ const photoURLs = new Map();
 let installPrompt = null;
 let unsavedChanges = false;
 let patternFileURL = null;
+let pendingImport = null;
 
 // ---------- Small helpers ----------
 
@@ -670,14 +672,14 @@ function renderDetail(id) {
     <section class="tracker">
       <div class="tracker-head"><h3>Row counter</h3><span>${rowsDone >= totalRows ? 'All rows done' : `Row ${nextRow} of ${totalRows}`}</span></div>
       ${rowsDone < totalRows ? `
-        ${builtIn ? `<p class="row-step"><b>Row ${nextRow}:</b> ${esc(builtIn.row(nextRow, totalRows))}</p>` : ''}
+        ${rowStep(pattern, nextRow, totalRows) ? `<p class="row-step"><b>Row ${nextRow}:</b> ${esc(rowStep(pattern, nextRow, totalRows))}</p>` : ''}
         <div class="meter" role="img" aria-label="${rowsDone} of ${totalRows} rows done"><span style="width:${(rowsDone / totalRows) * 100}%"></span></div>
         <div class="skein-actions">
           <button class="btn primary small" id="row-done">${icon.check} Done row ${nextRow}</button>
           ${rowsDone > 0 ? '<button class="link" id="row-undo">Undo</button>' : ''}
           <span class="skein-note">${plural(totalRows - rowsDone, 'row')} to go</span>
         </div>`
-      : `<p class="fine">Every row is done.${builtIn ? ` Next: <a href="#/rn/${builtIn.id}">end your blanket</a> with the braided edge.` : ' Time to finish the edge.'}</p>
+      : `<p class="fine">Every row is done.${builtIn ? ` Next: <a href="#/rn/${builtIn.id}">end your blanket</a> with the braided edge.` : pattern ? ` Time to finish the edge: see <a href="#/p/${pattern.id}">the pattern</a>.` : ' Time to finish the edge.'}</p>
         <button class="link" id="row-undo">Undo last row</button>`}
     </section>` : '';
 
@@ -1521,6 +1523,9 @@ function renderPatterns() {
       : `<p class="fine">Save each pattern once: its name, a link, or the PDF. Then pick it whenever you start a blanket.</p>`}
       <div class="library-actions">
         <a class="btn primary block" href="#/pnew">${icon.plus} New pattern</a>
+        <label class="btn ghost block file-btn">${icon.file} Import a pattern from a PDF
+          <input type="file" id="import-pdf" accept="application/pdf,.pdf"></label>
+        <p class="fine">Reads the PDF on this phone and fills in the name, sizes, yarn and every row it can find. You check it before it's saved.</p>
         <label class="btn ghost block file-btn">${icon.file} Add pattern files
           <input type="file" id="bulk-files" multiple accept="application/pdf,.pdf,image/*,.doc,.docx,.txt,.rtf,.pages"></label>
         <p class="fine">Pick several PDFs at once from Files or Google Drive. Each one becomes a pattern, named after the file.</p>
@@ -1529,6 +1534,12 @@ function renderPatterns() {
     <p class="shop-line"><a href="${SHOP_URL}" target="_blank" rel="noopener">More Breadcrumb patterns by Rustic Nastalje on Etsy ${icon.external}</a></p>`;
 
   hydratePhotos();
+  const pdfInput = document.getElementById('import-pdf');
+  pdfInput.addEventListener('change', async () => {
+    const file = pdfInput.files[0];
+    pdfInput.value = '';
+    if (file) await importPatternPdf(file);
+  });
   const bulk = document.getElementById('bulk-files');
   bulk.addEventListener('change', async () => {
     const files = [...bulk.files];
@@ -1554,6 +1565,82 @@ function renderPatterns() {
     renderPatterns();
     toast(`${plural(added, 'pattern')} added${skipped.length ? `. Already had ${skipped.length}` : ''}`);
   });
+}
+
+// ---------- Importing a pattern from a PDF ----------
+
+let pdfjsReady = null;
+function loadPdfjs() {
+  if (!pdfjsReady) {
+    pdfjsReady = import('./vendor/pdfjs/pdf.min.mjs').then((pdfjs) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', location.href).href;
+      return pdfjs;
+    });
+  }
+  return pdfjsReady;
+}
+
+async function importPatternPdf(file) {
+  toast('Reading the pattern…');
+  let draft;
+  try {
+    const pdfjs = await loadPdfjs();
+    const raw = await extractPdf(pdfjs, new Uint8Array(await file.arrayBuffer()));
+    draft = parsePattern(raw, nameFromFile(file.name));
+  } catch (err) {
+    console.error(err);
+    pdfjsReady = null;
+    toast("That PDF couldn't be read. It may be damaged or password protected.");
+    return;
+  }
+  const first = draft.sizes[0];
+  estimateSkeins(draft, first ? guideSkeins(first.width, first.length) : null);
+  draft.recipeWidth = first?.width ?? '';
+  draft.recipeLength = first?.length ?? '';
+  draft.yarns = draft.yarns.map((y) => ({ ...y, cost: '', supplier: '' }));
+  draft.file = await readPatternFile(file);
+  pendingImport = draft;
+  location.hash = '#/pimport';
+}
+
+function importSummary(d) {
+  if (!d.hasText) {
+    return `<aside class="notice warm"><div><strong>This PDF is made of pictures</strong>
+      <p>It has no text the app can read, so only the name and the file are filled in. Add the sizes and yarn yourself. If you made the PDF, exporting it with text (not flattened) lets ImadeIt read it.</p></div></aside>`;
+  }
+  const found = [
+    d.sizes.length ? plural(d.sizes.length, 'size') : '',
+    d.yarns.length ? plural(d.yarns.length, 'colour') : '',
+    Object.keys(d.rowSteps).length ? `${plural(Object.keys(d.rowSteps).length, 'row')} with instructions` : '',
+  ].filter(Boolean);
+  const clash = findPatternByName(d.name);
+  return `<aside class="notice"><div><strong>${found.length ? `Found ${found.join(', ')}` : 'Not much found'}</strong>
+    <p>Check everything below, fix anything that's off, then save.${d.yarns.some((y) => y.estimated) ? ' Skein counts marked “estimated” are worked out from the rows and your skein guide.' : ''}</p>
+    ${d.notes.length ? `<p class="fine">${d.notes.map(esc).join(' ')}</p>` : ''}
+    ${clash ? `<p class="fine"><b>You already have a pattern called “${esc(clash.name)}”.</b> Change the name to keep both.</p>` : ''}</div></aside>`;
+}
+
+function sizeChip(name) {
+  const n = (name || '').toLowerCase();
+  const map = [['queen', 'Queen'], ['king', 'King'], ['twin', 'Twin'], ['full', 'Full'], ['baby', 'Baby'], ['petite', 'Baby'], ['lap', 'Lap'], ['throw', 'Throw']];
+  return (map.find(([k]) => n.includes(k)) || [null, 'Other'])[1];
+}
+
+// The instruction for a row: the free pattern works it out, imported patterns keep the PDF's text.
+function rowStep(pattern, n, total) {
+  if (!pattern) return '';
+  if (typeof pattern.row === 'function') return pattern.row(n, total);
+  return pattern.rowSteps?.[n] || '';
+}
+
+function presetForSize(id, sizeIndex) {
+  const p = libraryPattern(id);
+  const z = p?.sizes?.[Number(sizeIndex)];
+  if (!z) return null;
+  return {
+    patternId: p.id, patternSize: z.name, size: sizeChip(z.name),
+    plannedWidth: z.width, plannedLength: z.length, stitchesWide: z.loops, rows: z.rows,
+  };
 }
 
 // ---------- Skein guide and yarn recipes ----------
@@ -1660,13 +1747,36 @@ function renderPatternDetail(id) {
         <div><dt>Last finished size</dt><dd>${esc(sizes[0] || '–')}</dd></div>
       </dl>` : ''}
       ${p.notes ? `<h3>Notes</h3><p class="notes">${esc(p.notes)}</p>` : ''}
-      <a class="btn primary block start-btn" href="#/newp/${p.id}">${icon.plus} Start a blanket with this pattern</a>
+      ${p.sizes?.length ? `
+        <h3>Pick a size</h3>
+        <div class="size-picker" role="radiogroup" aria-label="Size">
+          ${p.sizes.map((z, i) => `
+            <button type="button" class="size-option${i === 0 ? ' on' : ''}" role="radio" aria-checked="${i === 0}" data-size="${i}">
+              <strong>${esc(z.name || `Size ${i + 1}`)}</strong>
+              ${has(z.width) ? `<span>${esc(dimsText(z.width, z.length))}</span>` : ''}
+              <small>${[has(z.loops) ? `${z.loops} loops` : '', has(z.rows) ? `${z.rows} rows` : ''].filter(Boolean).join(' · ')}</small>
+            </button>`).join('')}
+        </div>
+        <a class="btn primary block start-btn" id="start-size" href="#/newps/${p.id}/0">${icon.plus} Start this blanket</a>`
+      : `<a class="btn primary block start-btn" href="#/newp/${p.id}">${icon.plus} Start a blanket with this pattern</a>`}
+      ${Object.keys(p.rowSteps || {}).length ? `
+        <details class="pattern-step">
+          <summary>Row by row <span class="fine">${plural(Object.keys(p.rowSteps).length, 'row')}</span></summary>
+          <ol class="rows-list compact">${Object.keys(p.rowSteps).map(Number).sort((a, b) => a - b).map((n) => `<li><b>Row ${n}:</b> ${esc(p.rowSteps[n])}</li>`).join('')}</ol>
+        </details>` : ''}
       ${made.length ? `<h3>Made with this pattern</h3><div class="grid">${made.map(card).join('')}</div>` : ''}
       <div class="actions"><button class="btn danger block" id="delete-pattern">Delete this pattern</button></div>
     </article>`;
   hydratePhotos();
   app.querySelectorAll('[data-open]').forEach((btn) => btn.addEventListener('click', () => openPhoto(btn.dataset.open)));
   if (p.file) preparePatternFile(p.file);
+  app.querySelectorAll('[data-size]').forEach((btn) => btn.addEventListener('click', () => {
+    app.querySelectorAll('[data-size]').forEach((x) => {
+      x.classList.toggle('on', x === btn);
+      x.setAttribute('aria-checked', String(x === btn));
+    });
+    document.getElementById('start-size').href = `#/newps/${p.id}/${btn.dataset.size}`;
+  }));
   document.getElementById('delete-pattern').addEventListener('click', async () => {
     const note = made.length ? ` ${plural(made.length, 'blanket')} made with it will keep the pattern's name.` : '';
     if (!confirm(`Delete the pattern “${p.name}”?${note}`)) return;
@@ -1684,12 +1794,16 @@ function renderPatternDetail(id) {
   });
 }
 
-function renderPatternForm(id) {
+// draft is a pattern read from a PDF, shown here to check before it's saved.
+function renderPatternForm(id, draft = null) {
   const existing = id ? libraryPattern(id) : null;
   if (id && !existing) return renderMissing();
-  let file = existing?.file ? { ...existing.file } : null;
+  const src = existing || draft || {};
+  let file = src.file ? { ...src.file } : null;
   const photos = (existing?.photos || []).map((pid) => ({ id: pid }));
-  let recipe = (existing?.yarns || []).map((y) => ({ ...y }));
+  let recipe = (src.yarns || []).map((y) => ({ ...y }));
+  let sizes = (src.sizes || []).map((z) => ({ ...z }));
+  let rowSteps = src.rowSteps || {};
   if (!recipe.length) recipe.push({ brand: '', color: '', skeins: '', cost: '', supplier: '' });
   unsavedChanges = false;
   const unit = unitLabel();
@@ -1697,19 +1811,20 @@ function renderPatternForm(id) {
   app.innerHTML = `
     <header class="bar">
       <button class="icon-btn" id="cancel" aria-label="Cancel">${icon.back}</button>
-      <span class="bar-title">${existing ? 'Edit pattern' : 'New pattern'}</span>
+      <span class="bar-title">${existing ? 'Edit pattern' : draft ? 'Check the pattern' : 'New pattern'}</span>
       <span></span>
     </header>
     <form id="pattern-form" class="form" novalidate>
+      ${draft ? importSummary(draft) : ''}
       <section class="group">
         <div class="photo-strip" id="pattern-photos"></div>
         <p class="hint" id="pattern-photo-hint"></p>
       </section>
       <section class="group">
         <label class="field"><span>Pattern name</span>
-          <input name="name" value="${esc(existing?.name || '')}" placeholder="e.g. Lodge Plaid" autocomplete="off" autocapitalize="words" required></label>
+          <input name="name" value="${esc(src.name || '')}" placeholder="e.g. Lodge Plaid" autocomplete="off" autocapitalize="words" required></label>
         <label class="field"><span>Link <em>optional</em></span>
-          <input name="url" type="url" inputmode="url" value="${esc(existing?.url || '')}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <input name="url" type="url" inputmode="url" value="${esc(src.url || '')}" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
         <div id="file-box"></div>
       </section>
       <section class="group">
@@ -1718,17 +1833,24 @@ function renderPatternForm(id) {
         <p class="pair-label">Skeins below are for <em>(${unit})</em></p>
         <div class="dims">
           <label class="field"><span>Width</span>
-            <input name="recipeWidth" type="number" inputmode="decimal" step="any" min="0" value="${esc(existing?.recipeWidth ?? '')}"></label>
+            <input name="recipeWidth" type="number" inputmode="decimal" step="any" min="0" value="${esc(src.recipeWidth ?? '')}"></label>
           <span class="times">×</span>
           <label class="field"><span>Length</span>
-            <input name="recipeLength" type="number" inputmode="decimal" step="any" min="0" value="${esc(existing?.recipeLength ?? '')}"></label>
+            <input name="recipeLength" type="number" inputmode="decimal" step="any" min="0" value="${esc(src.recipeLength ?? '')}"></label>
         </div>
         <div id="recipe"></div>
         <button type="button" class="btn ghost small" id="add-recipe-yarn">${icon.plus} Add a colour</button>
       </section>
       <section class="group">
+        <h3>Sizes <em class="optional">optional</em></h3>
+        <p class="hint group-hint">Each size's loops and rows. Starting a blanket in a size sets them up, and the row counter counts to the right row.</p>
+        <div id="sizes"></div>
+        <button type="button" class="btn ghost small" id="add-size">${icon.plus} Add a size</button>
+        <div id="row-steps"></div>
+      </section>
+      <section class="group">
         <h3>Notes</h3>
-        <textarea name="notes" rows="5" placeholder="Cast on counts, yarn that works well, changes you always make…">${esc(existing?.notes || '')}</textarea>
+        <textarea name="notes" rows="5" placeholder="Cast on counts, yarn that works well, changes you always make…">${esc(src.notes || '')}</textarea>
       </section>
       <div class="save-bar"><button type="submit" class="btn primary block" id="save">Save pattern</button></div>
     </form>`;
@@ -1752,7 +1874,7 @@ function renderPatternForm(id) {
         <div class="row">
           <div class="field"><label for="rc-${i}">Colour</label>
             <div class="ac"><input id="rc-${i}" data-k="color" value="${esc(y.color)}" placeholder="Pick or type" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false"></div></div>
-          <label class="field narrow"><span>Skeins</span>
+          <label class="field narrow"><span>Skeins${y.estimated ? ' <em>estimated</em>' : ''}</span>
             <input data-k="skeins" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.skeins)}"></label>
         </div>
         <div class="row">
@@ -1778,6 +1900,50 @@ function renderPatternForm(id) {
     }));
   };
   drawRecipe();
+
+  const sizeBox = document.getElementById('sizes');
+  const readSizes = () => [...sizeBox.querySelectorAll('.size-row')].map((row) => ({
+    name: row.querySelector('[data-z="name"]').value.trim(),
+    width: numberOrBlank(row.querySelector('[data-z="width"]').value),
+    length: numberOrBlank(row.querySelector('[data-z="length"]').value),
+    loops: numberOrBlank(row.querySelector('[data-z="loops"]').value),
+    rows: numberOrBlank(row.querySelector('[data-z="rows"]').value),
+  })).filter((z) => z.name || has(z.width) || has(z.loops) || has(z.rows));
+  const drawSizes = () => {
+    sizeBox.innerHTML = sizes.map((z, i) => `
+      <div class="size-row">
+        <input data-z="name" value="${esc(z.name)}" placeholder="Size name" aria-label="Size name" autocapitalize="words">
+        <div class="size-nums">
+          <label><span>W</span><input data-z="width" type="number" inputmode="decimal" step="any" min="0" value="${esc(z.width)}" aria-label="Width (${unit})"></label>
+          <label><span>L</span><input data-z="length" type="number" inputmode="decimal" step="any" min="0" value="${esc(z.length)}" aria-label="Length (${unit})"></label>
+          <label><span>Loops</span><input data-z="loops" type="number" inputmode="numeric" min="0" value="${esc(z.loops)}"></label>
+          <label><span>Rows</span><input data-z="rows" type="number" inputmode="numeric" min="0" value="${esc(z.rows)}"></label>
+          <button type="button" class="pic-remove guide-remove" data-remove-size="${i}" aria-label="Remove this size">${icon.close}</button>
+        </div>
+      </div>`).join('');
+    sizeBox.querySelectorAll('[data-remove-size]').forEach((btn) => btn.addEventListener('click', () => {
+      sizes = readSizes();
+      sizes.splice(Number(btn.dataset.removeSize), 1);
+      unsavedChanges = true;
+      drawSizes();
+    }));
+  };
+  drawSizes();
+  document.getElementById('add-size').addEventListener('click', () => {
+    sizes = [...readSizes(), { name: '', width: '', length: '', loops: '', rows: '' }];
+    drawSizes();
+    sizeBox.querySelector('.size-row:last-child input')?.focus();
+  });
+  const stepsBox = document.getElementById('row-steps');
+  const drawSteps = () => {
+    const n = Object.keys(rowSteps).length;
+    stepsBox.innerHTML = n ? `<div class="file-chip">${icon.check}
+        <span><strong>${plural(n, 'row')} with instructions</strong><small>The row counter shows each one as you knit</small></span>
+        <button type="button" class="link danger-text" id="remove-steps">Remove</button></div>` : '';
+    document.getElementById('remove-steps')?.addEventListener('click', () => { rowSteps = {}; unsavedChanges = true; drawSteps(); });
+  };
+  drawSteps();
+
   document.getElementById('add-recipe-yarn').addEventListener('click', () => {
     recipe = [...readRecipe(), { brand: '', color: '', skeins: '', cost: '', supplier: '' }];
     unsavedChanges = true;
@@ -1811,8 +1977,10 @@ function renderPatternForm(id) {
     if (unsavedChanges && !confirm('Leave without saving your changes?')) return;
     releasePhotoList(photos);
     unsavedChanges = false;
+    pendingImport = null;
     location.hash = existing ? `#/p/${existing.id}` : '#/patterns';
   });
+  if (draft) unsavedChanges = true;
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const data = new FormData(form);
@@ -1845,6 +2013,8 @@ function renderPatternForm(id) {
       file: fileMeta,
       photos: photoIds,
       yarns: readRecipe().filter((y) => y.brand || y.color || has(y.skeins)),
+      sizes: readSizes(),
+      rowSteps,
       recipeWidth: numberOrBlank(data.get('recipeWidth')),
       recipeLength: numberOrBlank(data.get('recipeLength')),
       notes: (data.get('notes') || '').trim(),
@@ -1855,6 +2025,7 @@ function renderPatternForm(id) {
     requestPersistence();
     unsavedChanges = false;
     toast(existing ? 'Pattern saved' : 'Pattern added');
+    pendingImport = null;
     location.hash = `#/p/${saved.id}`;
   });
 }
@@ -2337,6 +2508,11 @@ const routes = [
   [/^#\/p\/([\w-]+)$/, (m) => renderPatternDetail(m[1])],
   [/^#\/pnew$/, () => renderPatternForm()],
   [/^#\/pedit\/([\w-]+)$/, (m) => renderPatternForm(m[1])],
+  [/^#\/pimport$/, () => (pendingImport ? renderPatternForm(null, pendingImport) : (location.hash = '#/patterns'))],
+  [/^#\/newps\/([\w-]+)\/(\d+)$/, (m) => {
+    const preset = presetForSize(m[1], m[2]);
+    return preset ? renderForm(null, null, preset) : renderMissing();
+  }],
   [/^#\/rn\/([\w-]+)$/, (m) => renderBuiltInPattern(m[1])],
   [/^#\/newp\/([\w-]+)$/, (m) => (libraryPattern(m[1]) ? renderForm(null, null, { patternId: m[1] }) : renderMissing())],
   [/^#\/newrn\/([\w-]+)\/(\d+)$/, (m) => {
