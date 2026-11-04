@@ -5,7 +5,7 @@ import { YARN_LINES } from './yarn-catalog.js';
 import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -66,7 +66,27 @@ const num = (v) => Number(v) || 0;
 const round = (n) => Math.round(num(n) * 100) / 100;
 const usedOf = (b) => (b.yarns || []).reduce((n, y) => n + num(y.used), 0);
 const plannedOf = (b) => (b.yarns || []).reduce((n, y) => n + num(y.planned), 0);
-const emptyYarn = () => ({ brand: '', color: '', planned: '', used: '', log: [] });
+const emptyYarn = () => ({ brand: '', color: '', planned: '', used: '', cost: '', supplier: '', log: [] });
+const SUPPLIERS = ['Amazon', 'Walmart', 'Michaels', 'Hobby Lobby', 'Joann', 'Etsy', 'Temu', 'Local yarn shop'];
+const money = (n) => `$${num(n).toFixed(2)}`;
+
+// What a blanket's yarn cost: skeins used (or planned, while it's on the go) times cost per skein.
+function costOf(b) {
+  let total = 0;
+  let known = false;
+  for (const y of b.yarns || []) {
+    const skeins = num(y.used) || num(y.planned);
+    if (has(y.cost) && skeins) {
+      total += num(y.cost) * skeins;
+      known = true;
+    }
+  }
+  return known ? total : null;
+}
+
+// Yarn with skeins but no price, so a cost total is only part of the story.
+const hasUnpriced = (b) => (b.yarns || []).some((y) => (num(y.used) || num(y.planned)) && !has(y.cost));
+const costText = (b) => `${money(costOf(b))}${hasUnpriced(b) ? ' + unpriced yarn' : ''}`;
 
 // Version 1.0 stored one "skeins" number per yarn (it meant skeins used),
 // and versions before 1.2 had a single "stitch" field that is now the pattern name.
@@ -85,6 +105,8 @@ function normalize(blanket) {
       color: y.color || '',
       planned: y.planned ?? '',
       used: y.used ?? y.skeins ?? '',
+      cost: y.cost ?? '',
+      supplier: y.supplier || '',
       log: Array.isArray(y.log) ? y.log : [],
     })),
   };
@@ -557,6 +579,7 @@ function renderDetail(id) {
     ['Finished', b.finished ? fmtDate(b.finished) : 'Still in progress'],
     ['Took', days ? plural(days, 'day') : ''],
     ['Size', b.size],
+    ['Yarn cost', costOf(b) != null ? `${costText(b)}${b.finished ? '' : ' (planned)'}` : ''],
     ['Stitches wide', b.stitchesWide],
     ['Rows', b.rows],
   ].filter(([, v]) => has(v));
@@ -609,14 +632,16 @@ function renderDetail(id) {
         <div><span>${finalDims ? 'Finished' : 'Planned'}</span><b>${esc(finalDims || plannedDims)}</b></div>
       </div>` : '';
 
+  const cost = costOf(b);
   const yarnSection = b.finished && yarns.length ? `
-      <h3>Yarn <span>${used ? `${plural(round(used), 'skein')} used` : ''}${used && planned ? ` · ${skeinDiff(used, planned)}` : !used && planned ? `${plural(round(planned), 'skein')} planned` : ''}</span></h3>
+      <h3>Yarn <span>${used ? `${plural(round(used), 'skein')} used` : ''}${used && planned ? ` · ${skeinDiff(used, planned)}` : !used && planned ? `${plural(round(planned), 'skein')} planned` : ''}${cost != null ? ` · ${costText(b)}` : ''}</span></h3>
       <ul class="yarns">${yarns.map((y) => {
         const u = num(y.used);
         const p = num(y.planned);
         return `<li>${swatch(y)}${yarnName(y)}
           <div class="yarn-used">${has(y.used) ? `<b>${plural(round(u), 'skein')}</b>` : ''}
-          ${p ? `<span>${has(y.used) ? `planned ${round(p)}` : `${round(p)} planned`}</span>` : ''}</div></li>`;
+          ${p ? `<span>${has(y.used) ? `planned ${round(p)}` : `${round(p)} planned`}</span>` : ''}
+          ${has(y.cost) || y.supplier ? `<span>${[has(y.cost) ? `${money(y.cost)}/skein` : '', y.supplier].filter(Boolean).map(esc).join(' · ')}</span>` : ''}</div></li>`;
       }).join('')}</ul>` : '';
 
   const pattern = patternById(b.patternId);
@@ -1025,6 +1050,45 @@ function colorOptions(brand, query) {
   return rankOptions([...options.values()], query, query.trim() ? 10 : 200);
 }
 
+function supplierOptions(query) {
+  const options = new Map();
+  for (const b of state.blankets) for (const y of b.yarns || []) if (y.supplier) options.set(y.supplier.toLowerCase(), { value: y.supplier, mine: true });
+  for (const value of SUPPLIERS) if (!options.has(value.toLowerCase())) options.set(value.toLowerCase(), { value });
+  return rankOptions([...options.values()], query, 12);
+}
+
+// The cost and supplier last recorded for this brand and colour, newest blanket first.
+function lastBought(brand, color) {
+  const key = `${(brand || '').trim().toLowerCase()}|${(color || '').trim().toLowerCase()}`;
+  const sorted = [...state.blankets].sort((a, b) => (b.started || '').localeCompare(a.started || ''));
+  for (const b of sorted) {
+    for (const y of b.yarns || []) {
+      if (`${(y.brand || '').toLowerCase()}|${(y.color || '').toLowerCase()}` === key && (has(y.cost) || y.supplier)) return y;
+    }
+  }
+  for (const p of state.patterns) {
+    for (const y of p.yarns || []) {
+      if (`${(y.brand || '').toLowerCase()}|${(y.color || '').toLowerCase()}` === key && (has(y.cost) || y.supplier)) return y;
+    }
+  }
+  return null;
+}
+
+// Supplier suggestions, and the remembered cost filled in once a brand and colour are chosen.
+function wireCostFields(row) {
+  const supplier = row.querySelector('[data-k="supplier"]');
+  const cost = row.querySelector('[data-k="cost"]');
+  attachAutocomplete(supplier, { getOptions: supplierOptions });
+  const fill = () => {
+    const known = lastBought(row.querySelector('[data-k="brand"]').value, row.querySelector('[data-k="color"]').value);
+    if (!known) return;
+    if (!cost.value && has(known.cost)) cost.value = known.cost;
+    if (!supplier.value && known.supplier) supplier.value = known.supplier;
+  };
+  row.querySelector('[data-k="color"]').addEventListener('change', fill);
+  row.querySelector('[data-k="color"]').addEventListener('blur', () => setTimeout(fill, 0));
+}
+
 function swatchElement(name) {
   const el = document.createElement('span');
   el.className = 'swatch';
@@ -1056,7 +1120,7 @@ function renderForm(id, copyFromId, preset = null) {
         stitchesWide: source?.stitchesWide ?? '', rows: source?.rows ?? '',
         patternId: source?.patternId || '', patternName: source?.patternName || '', patternSize: source?.patternSize || '', rowsDone: 0,
         yarns: (source?.yarns || []).map((y) => ({
-          ...emptyYarn(), brand: y.brand, color: y.color, planned: num(y.used) ? y.used : y.planned,
+          ...emptyYarn(), brand: y.brand, color: y.color, planned: num(y.used) ? y.used : y.planned, cost: y.cost ?? '', supplier: y.supplier || '',
         })),
         notes: '', photos: [], createdAt: now,
       };
@@ -1171,6 +1235,8 @@ function renderForm(id, copyFromId, preset = null) {
       color: row.querySelector('[data-k="color"]').value.trim(),
       planned: numberOrBlank(row.querySelector('[data-k="planned"]').value),
       used: numberOrBlank(row.querySelector('[data-k="used"]').value),
+      cost: numberOrBlank(row.querySelector('[data-k="cost"]').value),
+      supplier: row.querySelector('[data-k="supplier"]').value.trim(),
       log: yarnLogs.get(row.dataset.key) || [],
     }));
   }
@@ -1188,11 +1254,18 @@ function renderForm(id, copyFromId, preset = null) {
           <label class="field"><span>Used so far</span>
             <input data-k="used" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.used)}"></label>
         </div>
+        <div class="row">
+          <label class="field"><span>Cost per skein ($)</span>
+            <input data-k="cost" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(y.cost)}" placeholder="e.g. 4.50"></label>
+          <div class="field"><label for="supplier-${y.key}">Supplier</label>
+            <div class="ac"><input id="supplier-${y.key}" data-k="supplier" value="${esc(y.supplier)}" placeholder="e.g. Amazon" autocomplete="off" autocapitalize="words" spellcheck="false"></div></div>
+        </div>
         ${yarns.length > 1 ? `<button type="button" class="link danger-text" data-remove-yarn="${i}">Remove this yarn</button>` : ''}
       </div>`).join('');
     yarnBox.querySelectorAll('.yarn').forEach((row) => {
       const brand = row.querySelector('[data-k="brand"]');
       const color = row.querySelector('[data-k="color"]');
+      wireCostFields(row);
       attachAutocomplete(brand, {
         getOptions: brandOptions,
         // Picking a brand goes straight on to its colours.
@@ -1526,7 +1599,7 @@ function recipeYarns(pattern, width, length) {
     halves[i] += 1;
     left -= 1;
   }
-  return list.map((y, i) => ({ ...emptyYarn(), brand: y.brand || '', color: y.color || '', planned: halves[i] == null ? '' : halves[i] / 2 }));
+  return list.map((y, i) => ({ ...emptyYarn(), brand: y.brand || '', color: y.color || '', cost: y.cost ?? '', supplier: y.supplier || '', planned: halves[i] == null ? '' : halves[i] / 2 }));
 }
 
 function patternThumb(p) {
@@ -1546,6 +1619,9 @@ function renderPatternDetail(id) {
   const recipeTotal = recipe.reduce((n, y) => n + num(y.skeins), 0);
   const unit = unitLabel();
   const bySize = recipe.length && has(p.recipeWidth) && has(p.recipeLength) ? skeinGuide() : [];
+  const recipeCosted = recipe.some((y) => has(y.cost));
+  const costs = done.filter((b) => !hasUnpriced(b)).map(costOf).filter((c) => c != null);
+  const avgCost = costs.length ? costs.reduce((n, c) => n + c, 0) / costs.length : null;
 
   app.innerHTML = `
     <header class="bar">
@@ -1563,13 +1639,15 @@ function renderPatternDetail(id) {
       ${recipe.length ? `
         <h3>Yarn <span>${recipeTotal ? `${plural(round(recipeTotal), 'skein')}` : ''}${has(p.recipeWidth) ? ` for ${esc(dimsText(p.recipeWidth, p.recipeLength))}` : ''}</span></h3>
         <ul class="yarns">${recipe.map((y) => `<li>${swatch(y)}${yarnName(y)}
-          <div class="yarn-used">${has(y.skeins) ? `<b>${plural(round(y.skeins), 'skein')}</b>` : ''}</div></li>`).join('')}</ul>
+          <div class="yarn-used">${has(y.skeins) ? `<b>${plural(round(y.skeins), 'skein')}</b>` : ''}
+          ${has(y.cost) || y.supplier ? `<span>${[has(y.cost) ? `${money(y.cost)}/skein` : '', y.supplier].filter(Boolean).map(esc).join(' · ')}</span>` : ''}</div></li>`).join('')}</ul>
         ${bySize.length ? `
           <div class="size-table-wrap"><table class="size-table">
-            <thead><tr><th>Size</th>${recipe.map((y) => `<th>${swatch(y)}<span>${esc(y.color || y.brand)}</span></th>`).join('')}<th>Total</th></tr></thead>
+            <thead><tr><th>Size</th>${recipe.map((y) => `<th>${swatch(y)}<span>${esc(y.color || y.brand)}</span></th>`).join('')}<th>Total${recipeCosted ? '<span class="sub">yarn cost</span>' : ''}</th></tr></thead>
             <tbody>${bySize.map((g) => {
               const ys = recipeYarns(p, g.width, g.length);
-              return `<tr><td>${esc(g.name || '')}<small>${esc(g.width)} × ${esc(g.length)} ${unit}</small></td>${ys.map((y) => `<td>${y.planned}</td>`).join('')}<td><b>${round(ys.reduce((n, y) => n + num(y.planned), 0))}</b></td></tr>`;
+              const sizeCost = costOf({ yarns: ys });
+              return `<tr><td>${esc(g.name || '')}<small>${esc(g.width)} × ${esc(g.length)} ${unit}</small></td>${ys.map((y) => `<td>${y.planned}</td>`).join('')}<td><b>${round(ys.reduce((n, y) => n + num(y.planned), 0))}</b>${recipeCosted && sizeCost != null ? `<small>${money(sizeCost)}${hasUnpriced({ yarns: ys }) ? '+' : ''}</small>` : ''}</td></tr>`;
             }).join('')}</tbody>
           </table></div>
           <p class="fine">Skeins per size follow your skein guide in Settings.</p>` : ''}` : `
@@ -1578,6 +1656,7 @@ function renderPatternDetail(id) {
         <div><dt>Made</dt><dd>${plural(made.length, 'time')}</dd></div>
         <div><dt>Skeins, on average</dt><dd>${avgSkeins ?? '–'}</dd></div>
         <div><dt>Days, on average</dt><dd>${avgDays ?? '–'}</dd></div>
+        ${avgCost != null ? `<div><dt>Yarn cost, on average</dt><dd>${money(avgCost)}</dd></div>` : ''}
         <div><dt>Last finished size</dt><dd>${esc(sizes[0] || '–')}</dd></div>
       </dl>` : ''}
       ${p.notes ? `<h3>Notes</h3><p class="notes">${esc(p.notes)}</p>` : ''}
@@ -1611,7 +1690,7 @@ function renderPatternForm(id) {
   let file = existing?.file ? { ...existing.file } : null;
   const photos = (existing?.photos || []).map((pid) => ({ id: pid }));
   let recipe = (existing?.yarns || []).map((y) => ({ ...y }));
-  if (!recipe.length) recipe.push({ brand: '', color: '', skeins: '' });
+  if (!recipe.length) recipe.push({ brand: '', color: '', skeins: '', cost: '', supplier: '' });
   unsavedChanges = false;
   const unit = unitLabel();
 
@@ -1662,6 +1741,8 @@ function renderPatternForm(id) {
     brand: row.querySelector('[data-k="brand"]').value.trim(),
     color: row.querySelector('[data-k="color"]').value.trim(),
     skeins: numberOrBlank(row.querySelector('[data-k="skeins"]').value),
+    cost: numberOrBlank(row.querySelector('[data-k="cost"]').value),
+    supplier: row.querySelector('[data-k="supplier"]').value.trim(),
   }));
   const drawRecipe = () => {
     recipeBox.innerHTML = recipe.map((y, i) => `
@@ -1674,6 +1755,12 @@ function renderPatternForm(id) {
           <label class="field narrow"><span>Skeins</span>
             <input data-k="skeins" type="number" inputmode="decimal" step="any" min="0" value="${esc(y.skeins)}"></label>
         </div>
+        <div class="row">
+          <label class="field"><span>Cost per skein ($)</span>
+            <input data-k="cost" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(y.cost ?? '')}" placeholder="e.g. 4.50"></label>
+          <div class="field"><label for="rs-${i}">Supplier</label>
+            <div class="ac"><input id="rs-${i}" data-k="supplier" value="${esc(y.supplier || '')}" placeholder="e.g. Amazon" autocomplete="off" autocapitalize="words" spellcheck="false"></div></div>
+        </div>
         ${recipe.length > 1 ? `<button type="button" class="link danger-text" data-remove="${i}">Remove this colour</button>` : ''}
       </div>`).join('');
     recipeBox.querySelectorAll('.yarn').forEach((row) => {
@@ -1681,6 +1768,7 @@ function renderPatternForm(id) {
       const color = row.querySelector('[data-k="color"]');
       attachAutocomplete(brand, { getOptions: brandOptions, onPick: () => color.focus() });
       attachAutocomplete(color, { getOptions: (q) => colorOptions(brand.value, q), renderSwatch: swatchElement, onPick: () => row.querySelector('[data-k="skeins"]').focus() });
+      wireCostFields(row);
     });
     recipeBox.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', () => {
       recipe = readRecipe();
@@ -1691,7 +1779,7 @@ function renderPatternForm(id) {
   };
   drawRecipe();
   document.getElementById('add-recipe-yarn').addEventListener('click', () => {
-    recipe = [...readRecipe(), { brand: '', color: '', skeins: '' }];
+    recipe = [...readRecipe(), { brand: '', color: '', skeins: '', cost: '', supplier: '' }];
     unsavedChanges = true;
     drawRecipe();
     recipeBox.querySelector('.yarn:last-child input')?.focus();
@@ -1863,7 +1951,7 @@ function spreadsheetRows(blankets) {
     };
     const yarns = (b.yarns || []).length ? b.yarns : [{}];
     for (const y of yarns) {
-      const row = { ...base, brand: y.brand, color: y.color, planned: y.planned, used: y.used };
+      const row = { ...base, brand: y.brand, color: y.color, planned: y.planned, used: y.used, cost: y.cost, supplier: y.supplier };
       rows.push(COLUMNS.map((c) => row[c.key] ?? ''));
     }
   }
@@ -1930,7 +2018,7 @@ async function importSpreadsheet(file) {
       continue;
     }
     const yarns = g.rows
-      .map((r) => ({ ...emptyYarn(), brand: get(r, 'brand'), color: get(r, 'color'), planned: parseNumber(get(r, 'planned')), used: parseNumber(get(r, 'used')) }))
+      .map((r) => ({ ...emptyYarn(), brand: get(r, 'brand'), color: get(r, 'color'), planned: parseNumber(get(r, 'planned')), used: parseNumber(get(r, 'used')), cost: parseNumber(get(r, 'cost')), supplier: get(r, 'supplier') }))
       .filter((y) => y.brand || y.color || has(y.planned) || has(y.used));
     blankets.push({
       ...normalize({}),

@@ -71,6 +71,8 @@ export const COLUMNS = [
   { key: 'color', label: 'Yarn colour', also: ['yarncolour', 'yarncolor', 'colour', 'color'] },
   { key: 'planned', label: 'Skeins planned', also: ['skeinsplanned', 'plannedskeins'] },
   { key: 'used', label: 'Skeins used', also: ['skeinsused', 'usedskeins', 'skeins', 'numberofskeins', 'howmanyskeins'] },
+  { key: 'cost', label: 'Cost per skein', also: ['costperskein', 'priceperskein', 'skeincost', 'skeinprice', 'cost'] },
+  { key: 'supplier', label: 'Supplier', also: ['supplier', 'store', 'boughtfrom', 'shop', 'vendor'] },
   { key: 'notes', label: 'Notes', also: ['notes', 'note', 'comments', 'comment'] },
 ];
 

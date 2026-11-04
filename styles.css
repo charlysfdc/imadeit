@@ -887,3 +887,8 @@ textarea { resize: vertical; line-height: 1.5; }
 .guide-dims span { color: var(--muted); }
 .guide-remove { position: static; width: 28px; height: 28px; }
 #guide + .btn { margin-top: 4px; }
+.size-table td small, .size-table th .sub { display: block; color: var(--muted); font-size: 0.72rem; font-weight: 500; }
+.size-table { font-size: 0.85rem; }
+.size-table th, .size-table td { padding: 9px 4px; }
+.size-table th { max-width: 62px; }
+.size-table td:first-child { white-space: normal; min-width: 92px; }
