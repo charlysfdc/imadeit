@@ -6,7 +6,7 @@ import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 import { extractPdf, parsePattern, estimateSkeins } from './pattern-import.js';
 
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.2';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -1606,6 +1606,8 @@ async function importPatternPdf(file) {
   draft.yarns = draft.yarns.map((y) => ({ ...y, cost: '', supplier: '' }));
   draft.file = await readPatternFile(file);
   pendingImport = draft;
+  // The "Reading…" message has done its job once the check screen opens.
+  document.getElementById('toast').classList.remove('show');
   location.hash = '#/pimport';
 }
 
