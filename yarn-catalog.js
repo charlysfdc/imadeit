@@ -1,6 +1,7 @@
 // Well-known chunky and chenille yarns, offered as suggestions in the Brand and Colour fields.
-// Colour names come from each brand's own store where possible (Bernat, Lion Brand, Premier, HOMBYS),
-// and from Ravelry and retailer listings otherwise (Loops & Threads, Cozyful, iDIY, Alize). Researched October 2026.
+// Colour names come from each brand's own store where possible (Bernat, Lion Brand, Premier, HOMBYS, Mellobello),
+// and from Ravelry and retailer listings otherwise (Loops & Threads, Cozyful, iDIY, Alize). Researched October-November 2026.
+// HouseABC, Inhand, MABOZOO and HOMBYS Tie Dye have only the colours bought so far; more are remembered as typed.
 // Anything not listed here can still be typed in, and is then remembered.
 export const YARN_LINES = [
   {
@@ -113,9 +114,10 @@ export const YARN_LINES = [
     display: "Cozyful Chunky Chenille",
     weight: "7 Jumbo",
     colors: [
-      "Black", "Black & Grey & White", "Blue & Pink & White", "Burgundy", "Cream", "Cream&Sage&Grey&Khaki",
-      "Forest & Sage & Mint", "Forest Green", "Khaki & Teal & Blue", "Multi Blue & White", "Multi Grey&White",
-      "Multi Purple", "Navy Blue", "Sage Green",
+      "Beige White", "Black", "Black & Grey & White", "Blue & Pink & White", "Burgundy", "Cherry Red",
+      "Cream", "Cream & Multi Coffee", "Cream&Sage&Grey&Khaki", "Dusty Pink", "Forest & Sage & Mint",
+      "Forest Green", "Khaki", "Khaki & Teal & Blue", "Lavender Fog", "Light Coffee", "Light Yellow",
+      "Multi Blue & White", "Multi Grey&White", "Multi Purple", "Mustard Yellow", "Navy Blue", "Sage Green",
     ],
   },
   {
@@ -124,15 +126,31 @@ export const YARN_LINES = [
     weight: "7 Jumbo",
     colors: [
       "Apricot Pink", "Black", "Black,White,Grey", "Blue Multi,White", "Blue,Light Blue,White",
-      "Blue,Sky Blue,White", "Buttercup", "Charcoal Grey", "Country Blue", "Cream", "Dark Blue,Blue",
-      "Dark Coffee", "Dark Green", "Dark Green,Sage Green", "Dark Grey,Grey,White", "Dark Grey,Pink,White",
-      "Dark Purple", "Grass", "Green Multi,White", "Green,White Multi", "Green,Yellow",
-      "Grey,Green,White,Khaki", "Khaki", "Light Blue", "Light Coffee", "Light Grey", "Light Purple",
-      "Mint Green", "Mint,Teal,Green", "Mustard Yellow", "Navy Blue", "Olive Green", "Orange",
+      "Blue,Sky Blue,White", "Buttercup", "Charcoal", "Charcoal Grey", "Country Blue", "Cream",
+      "Dark Blue,Blue", "Dark Coffee", "Dark Green", "Dark Green,Sage Green", "Dark Grey,Grey,White",
+      "Dark Grey,Pink,White", "Dark Purple", "Grass", "Green Multi,White", "Green,White Multi",
+      "Green,Yellow", "Grey", "Grey,Green,White,Khaki", "Khaki", "Light Blue", "Light Coffee", "Light Grey",
+      "Light Purple", "Mint Green", "Mint,Teal,Green", "Mustard Yellow", "Navy Blue", "Olive Green", "Orange",
       "Orange,Light Grey,White", "Pink", "Pink,Purple", "Pink,White,Yellow,Blue", "Pure White", "Purple",
       "Rainbow", "Rainbow,White", "Red", "Red,Green,White", "Red,Purple", "Rice Grey", "Rose Red",
       "Rose,Pink,White", "Sage Green", "Sage Green Multi", "Sky Blue", "Sky Blue,Green", "Smoke Grey",
       "Wine Red", "Wine Red,Black,Grey", "Wine Red,Grey,White", "Yellow,Grey,White",
+    ],
+  },
+  {
+    brand: "HOMBYS",
+    display: "HOMBYS Tie Dye",
+    weight: "7 Jumbo",
+    colors: [
+      "Black & White & Grey", "Khaki",
+    ],
+  },
+  {
+    brand: "HouseABC",
+    display: "HouseABC",
+    weight: "7 Jumbo",
+    colors: [
+      "Red", "White",
     ],
   },
   {
@@ -142,6 +160,14 @@ export const YARN_LINES = [
     colors: [
       "Baby Pink", "Bright Yellow", "Cream", "Dark Blue", "Dark Green", "Dark Purple", "Grey",
       "Rainbow Multi Color", "Sand",
+    ],
+  },
+  {
+    brand: "Inhand",
+    display: "Inhand",
+    weight: "7 Jumbo",
+    colors: [
+      "Deep Navy",
     ],
   },
   {
@@ -221,6 +247,32 @@ export const YARN_LINES = [
       "Dusty Mint Multi", "Grapes Dot", "Gray", "Ice Green", "Lavender", "Lemondrop Dot", "Meadow Violet",
       "Night Sky Multi", "Omphalodes", "Peach Pink", "Perfect Pink Dot", "Raindrops Multi", "Silver",
       "Sky Blue", "Tranquil Dot", "Turquoise", "White", "Winter White",
+    ],
+  },
+  {
+    brand: "MABOZOO",
+    display: "MABOZOO",
+    weight: "7 Jumbo",
+    colors: [
+      "Green Multi", "Pink",
+    ],
+  },
+  {
+    brand: "Mellobello",
+    display: "Mellobello",
+    weight: "7 Jumbo",
+    colors: [
+      "Apricot Pink", "Ash Grey", "Black", "Blackberry", "Blue Iris", "Blue Teal", "Blush Brown",
+      "Blush Petal", "Blush Pink", "Burgundy Night", "Burnt Clay", "ButterCup", "Canyon Clay",
+      "Charcoal Grey", "Cherry Wine", "Cocoa Drift", "Country Blue", "Cream", "Dark Brown", "Dark Green",
+      "Dark Purple", "Deep Harbor", "Dusty Plum", "Eggplant", "Forest Afternoon", "Golden Honey",
+      "Graphite Snow", "Grass", "Khaki", "Lake Blue", "Light Blue", "Light Coffee", "Light Grey",
+      "Light Purple", "Living Coral", "Mauve Taupe", "Midnight Orchid", "Mint Green", "Moss Field",
+      "Mulberry Wine", "Mustard Yellow", "Muted Burgundy", "Navy Blue", "Ocean Breeze", "Ocean Current",
+      "Olive Green", "Orange", "Pale Rose", "Pebble Paws", "Pink", "Pure White", "Purple", "Red", "Rose Pink",
+      "Rose Red", "Sage Green", "Sage Mist", "Sea Breeze", "Seafoam Calm", "Sky Blue", "Soft Aurora",
+      "Soft Blush", "Soft Lavender", "Soft Macaron", "Spring Moss", "Stone Moss", "Sunset Sherbet", "Teal",
+      "Teal Blue", "Teal Green", "Twilight Iris", "Urban Ash", "Velvet Taupe", "Walnut Brown", "Wine Red",
     ],
   },
   {
