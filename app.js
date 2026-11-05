@@ -6,7 +6,7 @@ import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 import { extractPdf, parsePattern, estimateSkeins } from './pattern-import.js';
 
-const APP_VERSION = '1.7.3';
+const APP_VERSION = '1.7.4';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
@@ -1168,10 +1168,12 @@ function renderForm(id, copyFromId, preset = null) {
             <input name="title" value="${esc(b.title)}" placeholder="e.g. Sage garter throw" autocomplete="off" autocapitalize="sentences"></label>
         </div>
         <div class="row">
-          <label class="field"><span>Started</span><input name="started" type="date" value="${esc(b.started)}"></label>
-          <label class="field"><span>Finished</span><input name="finished" type="date" value="${esc(b.finished)}"></label>
+          <div class="field"><div class="date-head"><label for="started">Started</label><button type="button" class="link clear-date" data-clear="started"${b.started ? '' : ' hidden'}>Clear</button></div>
+            <input id="started" name="started" type="date" value="${esc(b.started)}"></div>
+          <div class="field"><div class="date-head"><label for="finished">Finished</label><button type="button" class="link clear-date" data-clear="finished"${b.finished ? '' : ' hidden'}>Clear</button></div>
+            <input id="finished" name="finished" type="date" value="${esc(b.finished)}"></div>
         </div>
-        <p class="hint">Leave “Finished” empty while it's still on the go.</p>
+        <p class="hint">Leave “Finished” empty while it's still on the go. Tap Clear to empty a date.</p>
       </section>
 
       <section class="group">
@@ -1361,6 +1363,18 @@ function renderForm(id, copyFromId, preset = null) {
   drawPatternExtra();
 
   form.addEventListener('input', () => { unsavedChanges = true; });
+  // iPhone date pickers have no way to empty a date, so each date gets its own Clear button.
+  form.querySelectorAll('[data-clear]').forEach((btn) => {
+    const input = form.querySelector(`[name="${btn.dataset.clear}"]`);
+    const sync = () => { btn.hidden = !input.value; };
+    input.addEventListener('input', sync);
+    input.addEventListener('change', sync);
+    btn.addEventListener('click', () => {
+      input.value = '';
+      unsavedChanges = true;
+      sync();
+    });
+  });
   document.getElementById('add-yarn').addEventListener('click', () => {
     drawYarns([...readYarns(), { ...emptyYarn(), key: uid() }]);
     unsavedChanges = true;
