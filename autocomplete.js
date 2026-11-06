@@ -35,8 +35,18 @@ export function attachAutocomplete(input, { getOptions, onPick, renderSwatch }) 
 
   let options = [];
   let active = -1;
+  let press = null;
+  let pickedAt = 0;
+  let closeTimer = 0;
+
+  // A finger dragging the list to scroll it is not a pick.
+  list.addEventListener('pointercancel', () => { press = null; });
+  list.addEventListener('pointermove', (e) => {
+    if (press && press.id === e.pointerId && (Math.abs(e.clientX - press.x) > 10 || Math.abs(e.clientY - press.y) > 10)) press = null;
+  });
 
   function close() {
+    clearTimeout(closeTimer);
     list.hidden = true;
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
@@ -55,6 +65,7 @@ export function attachAutocomplete(input, { getOptions, onPick, renderSwatch }) 
   }
 
   function open() {
+    clearTimeout(closeTimer);
     options = getOptions(input.value);
     const typed = input.value.trim().toLowerCase();
     // Nothing to offer, or the field already holds the only match.
@@ -78,9 +89,26 @@ export function attachAutocomplete(input, { getOptions, onPick, renderSwatch }) 
         note.textContent = o.mine ? 'Used before' : o.note;
         li.append(note);
       }
-      // pointerdown + preventDefault keeps the keyboard open and the field focused.
-      li.addEventListener('pointerdown', (e) => e.preventDefault());
-      li.addEventListener('click', () => pick(i));
+      // Picking happens when the finger lifts, not on click: iPhone Safari can drop the
+      // click, or blur the field first. preventDefault keeps the keyboard up and the field focused.
+      li.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        press = { id: e.pointerId, x: e.clientX, y: e.clientY, i };
+      });
+      li.addEventListener('mousedown', (e) => e.preventDefault());
+      li.addEventListener('pointerup', (e) => {
+        const p = press;
+        press = null;
+        if (!p || p.id !== e.pointerId || p.i !== i) return;
+        if (Math.abs(e.clientX - p.x) > 10 || Math.abs(e.clientY - p.y) > 10) return;
+        pickedAt = Date.now();
+        pick(i, true);
+      });
+      // Keyboard and screen-reader activation still arrives as a plain click.
+      li.addEventListener('click', () => {
+        if (Date.now() - pickedAt < 800) return;
+        pick(i);
+      });
       list.append(li);
     });
     list.hidden = false;
@@ -89,12 +117,20 @@ export function attachAutocomplete(input, { getOptions, onPick, renderSwatch }) 
     active = -1;
   }
 
-  function pick(i) {
+  function pick(i, byTouch) {
     const o = options[i];
     if (!o) return;
     input.value = o.value;
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    close();
+    if (byTouch) {
+      // Leave the list up for a moment, so the click the phone sends after the tap
+      // lands on it and not on whatever is underneath.
+      highlight(i);
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(close, 350);
+    } else {
+      close();
+    }
     if (onPick) onPick(o.value);
   }
 
@@ -111,7 +147,9 @@ export function attachAutocomplete(input, { getOptions, onPick, renderSwatch }) 
     const typed = input.value.trim().toLowerCase();
     const same = typed && getOptions(input.value).find((o) => o.value.toLowerCase() === typed);
     if (same && same.value !== input.value) input.value = same.value;
-    close();
+    // Closing a moment later lets a tap that blurred the field still reach its option.
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(close, 300);
   });
   input.addEventListener('keydown', (e) => {
     if (list.hidden) {

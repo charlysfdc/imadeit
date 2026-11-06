@@ -6,7 +6,7 @@ import { RUSTIC_PATTERNS, SHOP_URL } from './rustic-patterns.js';
 import { parseCSV, toCSV, COLUMNS, mapHeadings, parseDate, parseNumber } from './csv.js';
 import { extractPdf, parsePattern, estimateSkeins } from './pattern-import.js';
 
-const APP_VERSION = '1.7.4';
+const APP_VERSION = '1.7.5';
 const SIZES = ['Baby', 'Lap', 'Throw', 'Twin', 'Full', 'Queen', 'King', 'Other'];
 const MAX_PATTERN_FILE = 30 * 1024 * 1024;
 
